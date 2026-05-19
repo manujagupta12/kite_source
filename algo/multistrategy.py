@@ -8,7 +8,7 @@ Run this file for ALL 7 strategies across all market conditions.
 
 Trade logging:
   Press Ctrl+C at any time → trade input menu appears
-  All trades saved to: C:\AlgoTrading\logs\trades_YYYYMMDD.csv
+  All trades saved to: C:\\AlgoTrading\\logs\\trades_YYYYMMDD.csv
 
 7 STRATEGIES:
   S1 Calendar Spread      — Sideways, low VIX
@@ -25,11 +25,24 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, date
 
-sys.path.insert(0, r"C:\AlgoTrading\scripts")
+import os as _os
+_ALGO_DIR = _os.path.dirname(_os.path.abspath(__file__))
+sys.path.insert(0, _ALGO_DIR)                          # algo/ folder (this script's dir)
+sys.path.insert(1, r"C:\AlgoTrading\scripts")          # legacy path fallback
 try:
     import trade_logger as logger
+    _logger_ok = True
 except ImportError:
-    print("  ERROR: trade_logger.py not found in C:\\AlgoTrading\\scripts\\")
+    print("  [Logger] trade_logger.py not found — trade logging disabled")
+    _logger_ok = False
+
+    # ── Stub so script doesn't crash without logger ────────────
+    class _LoggerStub:
+        def load_today(self):          pass
+        def get_daily_pnl(self):       return 0.0, 0, 0
+        def interactive_input(self, m=""): pass
+        def print_daily_summary(self): pass
+    logger = _LoggerStub()
     sys.exit(1)
 
 try:
