@@ -803,4 +803,4 @@ def health_check():
 def root(): return {"message":"AlgoTrade API v3.2","docs":"/docs","health":"/health"}
 
 if __name__=="__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000 , reload=True , log_level="info")
+    uvicorn.run("main:app" , host="0.0.0.0" , port=8000 , reload=True , log_level="info")
