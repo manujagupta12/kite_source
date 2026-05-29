@@ -1,5 +1,5 @@
-# AlgoTrade Backend - pinned Python deps
-# FIX: numpy 2.x conflicts with pandas 2.2.x - pinned to 1.26.4
+# AlgoTrade Backend — Python dependencies
+# XLS feed removed: xlrd / openpyxl no longer needed for data feed
 
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
@@ -13,7 +13,18 @@ python-dotenv==1.0.1
 python-jose[cryptography]==3.3.0
 bcrypt==4.2.1
 
-# Data processing for XLS feed
-openpyxl==3.1.5
+# Data processing
 pandas==2.2.3
 numpy==1.26.4
+pyarrow==15.0.2
+
+# NSE data (free)
+nsepython==0.0.955
+
+# Dhan WebSocket (optional — free with Dhan account)
+# Uncomment when DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN are set
+# dhanhq==2.0.2
+
+# Historical data
+# xlrd kept ONLY for reading old cached XLS files if needed
+# xlrd==2.0.1
