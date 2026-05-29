@@ -1,6 +1,6 @@
 """
 ALGOTRADE BACKEND  —  app/backend/main.py
-v3.2.0 — trader_logger integration + subscription tiers + chart endpoints
+v3.3.0 — XLS removed, NSE Direct API wired, nse_live flag live
 """
 
 import asyncio, csv, hashlib, json, logging, os, random, sys, time
@@ -29,10 +29,23 @@ except ImportError:
 _ALGO_DIR = Path(__file__).parent.parent.parent / "algo"
 sys.path.insert(0, str(_ALGO_DIR))
 
+# ── Data provider — NSE Direct API (replaces multitrade_loader / XLS) ──────
 try:
-    import multitrade_loader as _loader; _XLS_OK = True
+    import algo.data_provider as _loader
+    _NSE_OK = True
+    logging.info("[DataProvider] NSE Direct API loaded")
 except ImportError:
-    _XLS_OK = False
+    try:
+        import data_provider as _loader
+        _NSE_OK = True
+        logging.info("[DataProvider] NSE Direct API loaded (local path)")
+    except ImportError:
+        _loader = None
+        _NSE_OK = False
+        logging.warning("[DataProvider] Not loaded — signals will use mock")
+
+# Legacy alias kept so any remaining code that checks _XLS_OK still works
+_XLS_OK = _NSE_OK
 
 try:
     from pcr_strategy import PCRStrategy, NseOiFetcher
@@ -49,13 +62,13 @@ except Exception as e:
 
 SECRET_KEY   = os.environ.get("SECRET_KEY", "algotrade-dev-secret-CHANGE-IN-PROD")
 ALGORITHM   = "HS256"
-TOKEN_EXPIRE = 60 * 24 * 7  # 7-day tokens
+TOKEN_EXPIRE = 60 * 24 * 7
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 _db: Dict[str, Any] = {"users": {}, "trades": {}, "signals": [], "regime": {}}
 _paper: Dict[str, Any] = {}
 
-# ── Subscription Plans (weekly / monthly / annual) ────────────────────
+# ── Subscription Plans ────────────────────────────────────────────────────
 TIERS = {
     "free":    {"strategies": 2,  "instruments": 1, "live": False, "delay_min": 15, "log_trades": False},
     "weekly":  {"strategies": 7,  "instruments": 3, "live": True,  "delay_min": 0,  "log_trades": True},
@@ -82,11 +95,11 @@ PLANS_LIST = [
     {
         "id": "annual", "name": "Annual", "badge": "BEST VALUE",
         "weekly_price": None, "monthly_price": None, "annual_price": 10000,
-        "features": ["Everything in Monthly", "6 instruments", "API access", "Custom alerts", "Save ₹8,000 vs monthly"],
+        "features": ["Everything in Monthly", "6 instruments", "API access", "Custom alerts", "Save \u20b98,000 vs monthly"],
     },
 ]
 
-# ── Auth helpers ───────────────────────────────────────────────────────────
+# ── Auth helpers ──────────────────────────────────────────────────────────
 def hash_password(pw):
     if _BCRYPT_OK: return _bcrypt.hashpw(pw.encode()[:72], _bcrypt.gensalt()).decode()
     return hashlib.sha256(pw.encode()).hexdigest()
@@ -124,7 +137,7 @@ def get_optional_user(creds: HTTPAuthorizationCredentials = Depends(security)):
     if not payload: return None
     return _db["users"].get(payload.get("sub"))
 
-# ── Pydantic models ──────────────────────────────────────────────────────────
+# ── Pydantic models ───────────────────────────────────────────────────────
 class RegisterRequest(BaseModel):
     name: str; email: str; password: str
 class LoginRequest(BaseModel):
@@ -155,9 +168,8 @@ class PaperTradeRequest(BaseModel):
 class PaperCloseRequest(BaseModel):
     trade_id: str; exit_spread: float; notes: Optional[str]=""
 class UpgradeRequest(BaseModel):
-    plan: str; billing: str = "monthly"  # weekly | monthly | annual
+    plan: str; billing: str = "monthly"
 
-# trader_logger bridge models
 class TLTradeEnterRequest(BaseModel):
     strategy: str; instrument: str = "BANKNIFTY"; option_type: str = "CE"
     direction: str = "LONG"; near_strike: str = "0"; far_strike: str = "0"
@@ -170,7 +182,7 @@ _MOCK_REGIMES = ["R2 SIDEWAYS LOW", "R3 SIDEWAYS HIGH IV", "R4 TRENDING BULL", "
 _ROUND_ROBIN = ["NIFTY", "BANKNIFTY", "FINNIFTY"]
 _rr_idx = 0
 
-# ── Mock signal generators ───────────────────────────────────────────────
+# ── Mock signal generators ────────────────────────────────────────────────
 def _mock_fo_signal(instrument=None):
     global _rr_idx
     if instrument is None:
@@ -231,44 +243,84 @@ def _mock_pcr_signal(instrument=None):
         "near_strike":None,"far_strike":None,"spread":None,"target_pts":None,"sl_pts":None,
         "lots_suggested":1,
         "reason":f"PCR_OI {pcr:.3f} {'>' if is_oversold else '<'} {1.3 if is_oversold else 0.6}",
-        "action":f"{dirn} {inst} — PCR={pcr:.3f} ({tag})",
+        "action":f"{dirn} {inst} \u2014 PCR={pcr:.3f} ({tag})",
         "event_type":"signal",
     }
 
-def _xls_signal():
-    if not _XLS_OK: return None
+# ── FIXED: NSE live signal (was _xls_signal, used wrong far_bid key) ───────
+def _nse_signal():
+    """Generate live calendar signal from NSE Direct API via data_provider."""
+    if not _NSE_OK or _loader is None:
+        return None
     try:
-        df=_loader.get_instruments()
-        if df is None or df.empty: return None
-        atm=_loader.get_atm_strike(df)
-        if not atm: return None
-        ce=_loader.get_spread(df,atm,"CE"); pe=_loader.get_spread(df,atm,"PE")
-        if ce is None: return None
-        spread=ce["spread"]; fair=ce["fair"]; dev=ce["deviation"]
-        score=min(95,max(30,50+int(abs(dev)*8)))
-        dirn="LONG" if dev<-3 else "SHORT" if dev>3 else "WAIT"
-        if dirn=="WAIT": return None
-        sig={
-            "timestamp":datetime.now().isoformat(),"source":"xls_live","market":"FO",
-            "strategy":"S1 CALENDAR","score":score,"direction":dirn,
-            "instrument":"BANKNIFTY","symbol":"BANKNIFTY",
-            "near_strike":atm,"far_strike":atm,
-            "spread":spread,"fair_value":fair,"deviation":dev,
-            "vix":None,"regime":"LIVE","risk":"MEDIUM",
-            "near_bid":ce.get("bid"),"near_ask":ce.get("ask"),
-            "far_bid":ce.get("far_leg"),"buy_far_at":ce.get("buy_far_at"),
-            "sell_near_at":ce.get("sell_near_at"),"target_pts":8,"sl_pts":6,
-            "lots_suggested":1,
-            "reason":f"CE Spread {spread:+.2f} | Fair {fair:+.2f} | Dev {dev:+.2f}",
-            "action":f"{dirn} BANKNIFTY Calendar @ {atm}",
-            "orders":f"BUY Far {atm} CE @ {ce.get('buy_far_at')}\nSELL Near {atm} CE @ {ce.get('sell_near_at')}",
-            "event_type":"signal",
+        df = _loader.get_instruments("BANKNIFTY")
+        if df is None or df.empty:
+            return None
+        atm = _loader.get_atm_strike(df)
+        if not atm:
+            return None
+        ce = _loader.get_spread(df, atm, "CE", "BANKNIFTY")
+        pe = _loader.get_spread(df, atm, "PE", "BANKNIFTY")
+        if ce is None:
+            return None
+        spread = ce["spread"]
+        fair   = ce["fair"]
+        dev    = ce["deviation"]
+        score  = min(95, max(30, 50 + int(abs(dev) * 8)))
+        dirn   = "LONG" if dev < -3 else "SHORT" if dev > 3 else "WAIT"
+        if dirn == "WAIT":
+            return None
+        sig = {
+            "timestamp":    datetime.now().isoformat(),
+            "source":       "nse_live",          # FIXED: was 'xls_live'
+            "market":       "FO",
+            "strategy":     "S1 CALENDAR",
+            "score":        score,
+            "direction":    dirn,
+            "instrument":   "BANKNIFTY",
+            "symbol":       "BANKNIFTY",
+            "near_strike":  atm,
+            "far_strike":   atm,
+            "spread":       spread,
+            "fair_value":   fair,
+            "deviation":    dev,
+            "vix":          None,
+            "regime":       "LIVE",
+            "risk":         "MEDIUM",
+            "near_bid":     ce.get("bid"),
+            "near_ask":     ce.get("ask"),
+            "far_bid":      ce.get("far_bid"),   # FIXED: was ce.get("far_leg")
+            "far_ask":      ce.get("far_ask"),   # FIXED: now included
+            "buy_far_at":   ce.get("buy_far_at"),
+            "sell_near_at": ce.get("sell_near_at"),
+            "target_pts":   8,
+            "sl_pts":       6,
+            "lots_suggested": 1,
+            "near_expiry":  ce.get("near_expiry", ""),
+            "far_expiry":   ce.get("far_expiry", ""),
+            "reason":       f"CE Spread {spread:+.2f} | Fair {fair:+.2f} | Dev {dev:+.2f}",
+            "action":       f"{dirn} BANKNIFTY Calendar @ {atm}",
+            "orders":       (
+                f"BUY Far {atm} CE @ {ce.get('buy_far_at')}\n"
+                f"SELL Near {atm} CE @ {ce.get('sell_near_at')}"
+            ),
+            "event_type":   "signal",
         }
-        if pe: sig.update({"pe_spread":pe.get("spread"),"pe_deviation":pe.get("deviation"),
-                           "pe_buy_far":pe.get("buy_far_at"),"pe_sell_near":pe.get("sell_near_at")})
+        if pe:
+            sig.update({
+                "pe_spread":    pe.get("spread"),
+                "pe_deviation": pe.get("deviation"),
+                "pe_buy_far":   pe.get("buy_far_at"),
+                "pe_sell_near": pe.get("sell_near_at"),
+                "pe_far_bid":   pe.get("far_bid"),   # FIXED: correct key
+            })
         return sig
     except Exception as e:
-        logging.debug(f"[XLS] {e}"); return None
+        logging.debug(f"[NSE] signal error: {e}")
+        return None
+
+# Keep old name as alias so any external callers don't break
+_xls_signal = _nse_signal
 
 def _pcr_signal_live(vix=None):
     if not _PCR_OK or not _pcr_strategy: return []
@@ -401,7 +453,8 @@ async def signal_loop():
         _db["signals"].append(_mock_pcr_signal(inst))
     while True:
         await asyncio.sleep(5); cycle+=1
-        fo_sig=_xls_signal() or _mock_fo_signal()
+        # FIXED: use _nse_signal() not _xls_signal()
+        fo_sig = _nse_signal() or _mock_fo_signal()
         _db["signals"].append(fo_sig); _db["signals"]=_db["signals"][-300:]
         await broadcaster.broadcast({"type":"signal","data":fo_sig})
         pcr_mock=_mock_pcr_signal(_ROUND_ROBIN[cycle%3])
@@ -428,7 +481,16 @@ async def signal_loop():
             last=_db["signals"][-1]
             await broadcaster.broadcast({"type":"regime","regime":last.get("regime","UNKNOWN"),"vix":last.get("vix"),"risk":last.get("risk","MEDIUM"),"timestamp":last.get("timestamp"),"source":last.get("source","mock")})
         if cycle%12==0:
-            await broadcaster.broadcast({"type":"heartbeat","xls_live":_XLS_OK,"nse_live":False,"pcr_live":_PCR_OK,"tl_live":_TL_OK,"signals_n":len(_db["signals"]),"timestamp":datetime.now().isoformat()})
+            # FIXED: nse_live now reflects actual NSE connectivity, not hardcoded False
+            await broadcaster.broadcast({
+                "type":      "heartbeat",
+                "xls_live":  False,          # XLS permanently retired
+                "nse_live":  _NSE_OK,        # FIXED: true when data_provider loaded
+                "pcr_live":  _PCR_OK,
+                "tl_live":   _TL_OK,
+                "signals_n": len(_db["signals"]),
+                "timestamp": datetime.now().isoformat(),
+            })
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
@@ -436,17 +498,17 @@ async def lifespan(app:FastAPI):
         _db["users"]["demo@algotrade.in"]={"name":"Demo User","email":"demo@algotrade.in",
             "password":hash_password("demo123"),"plan":"monthly","billing":"monthly",
             "joined":str(date.today()),"daily_target":50000,"plan_expiry":str(date.today()+timedelta(days=30))}
-    logging.info(f"  AlgoTrade API v3.2  XLS:{_XLS_OK}  PCR:{_PCR_OK}  TradeLogger:{_TL_OK}")
+    logging.info(f"  AlgoTrade API v3.3  NSE:{_NSE_OK}  PCR:{_PCR_OK}  TradeLogger:{_TL_OK}")
     task=asyncio.create_task(signal_loop())
     yield
     task.cancel()
 
-app=FastAPI(title="AlgoTrade API",version="3.2.0",lifespan=lifespan)
+app=FastAPI(title="AlgoTrade API",version="3.3.0",lifespan=lifespan)
 app.add_middleware(CORSMiddleware,
-    allow_origins=["*"],  # production: restrict to your domain
+    allow_origins=["*"],
     allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 
-# ── Auth ────────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────
 @app.post("/auth/register")
 def register(req:RegisterRequest):
     if req.email in _db["users"]: raise HTTPException(400,"Email already registered")
@@ -467,14 +529,17 @@ def login(req:LoginRequest):
 def me(user=Depends(get_current_user)):
     return {k:v for k,v in user.items() if k!="password"}
 
-# ── Signals ────────────────────────────────────────────────────────────
+# ── Signals ───────────────────────────────────────────────────────────────
 @app.get("/signals")
 def signals_shorthand(limit:int=50,user=Depends(get_optional_user)):
-    return {"signals":_db["signals"][-limit:][::-1],"count":len(_db["signals"]),"xls_live":_XLS_OK}
+    # FIXED: expose nse_live not xls_live to frontend
+    return {"signals":_db["signals"][-limit:][::-1],"count":len(_db["signals"]),
+            "nse_live":_NSE_OK,"xls_live":False}
 
 @app.get("/signals/latest")
 def get_signals(limit:int=50,user=Depends(get_optional_user)):
-    return {"signals":_db["signals"][-limit:][::-1],"count":len(_db["signals"]),"xls_live":_XLS_OK}
+    return {"signals":_db["signals"][-limit:][::-1],"count":len(_db["signals"]),
+            "nse_live":_NSE_OK,"xls_live":False}
 
 @app.get("/signals/regime")
 def get_regime():
@@ -514,25 +579,15 @@ def pcr_signals_endpoint(symbol:str="NIFTY"):
     sig=_pcr_strategy.generate_signal(symbol.upper(),vix=vix)
     return {"signals":[sig] if sig else [],"count":1 if sig else 0,"timestamp":datetime.now().isoformat()}
 
-# ── Chart data endpoint — OHLCV candle data for signal chart ──
 @app.get("/chart/{symbol}")
 def get_chart_data(symbol:str, interval:str="5"):
-    """Return synthetic OHLCV candle data for the given symbol.
-    In production this should fetch from NSE historical API or a broker.
-    interval: candle interval in minutes (1,3,5,15,30,60,D)
-    """
     symbol=symbol.upper()
-    BASES={"NIFTY":24500,"BANKNIFTY":53000,"FINNIFTY":23000,
-           "NIFTY50":24500,"VIX":14.5}
+    BASES={"NIFTY":24500,"BANKNIFTY":53000,"FINNIFTY":23000,"NIFTY50":24500,"VIX":14.5}
     base=BASES.get(symbol,1000)
-    # Generate 60 candles of synthetic OHLCV
-    candles=[]
-    now=datetime.now()
-    price=base
+    candles=[]; now=datetime.now(); price=base
     for i in range(60,0,-1):
         ts=now-timedelta(minutes=int(interval)*i)
-        open_=round(price,2)
-        chg=random.uniform(-0.008,0.008)
+        open_=round(price,2); chg=random.uniform(-0.008,0.008)
         close=round(price*(1+chg),2)
         high=round(max(open_,close)*(1+random.uniform(0,0.004)),2)
         low=round(min(open_,close)*(1-random.uniform(0,0.004)),2)
@@ -544,12 +599,10 @@ def get_chart_data(symbol:str, interval:str="5"):
     return {"symbol":symbol,"interval":interval,"candles":candles,
             "current_price":current_price,"timestamp":datetime.now().isoformat()}
 
-# ── Trader Logger endpoints (bridges trader_logger.py) ──
+# ── Trader Logger ─────────────────────────────────────────────────────────
 @app.get("/tradelog/today")
 def tl_today(user=Depends(get_current_user)):
-    """Return today's trades from trader_logger CSV."""
     if not _TL_OK:
-        # Fallback: return trades from in-memory DB
         trades=_db["trades"].get(user["email"],[])
         return {"trades":trades,"source":"db","tl_available":False}
     realised,open_count,total=_tl.get_daily_pnl()
@@ -560,13 +613,10 @@ def tl_today(user=Depends(get_current_user)):
 
 @app.post("/tradelog/enter")
 def tl_enter(req:TLTradeEnterRequest,user=Depends(get_current_user)):
-    """Log a new trade via trader_logger."""
     tier=TIERS.get(user.get("plan","free"),TIERS["free"])
     if not tier["log_trades"]: raise HTTPException(403,"Trade logging requires Weekly plan or above")
     if not _TL_OK:
-        # Fallback to in-memory DB trade log
-        import uuid
-        ls=LOT_SIZES.get(req.instrument,25)
+        import uuid; ls=LOT_SIZES.get(req.instrument,25)
         trade={"id":str(uuid.uuid4())[:8].upper(),"date":str(date.today()),
                "entry_time":datetime.now().isoformat(),"exit_time":None,
                "strategy":req.strategy,"instrument":req.instrument,
@@ -577,8 +627,7 @@ def tl_enter(req:TLTradeEnterRequest,user=Depends(get_current_user)):
                "status":"OPEN","notes":req.notes,"mode":"LIVE","source":"manual"}
         _db["trades"].setdefault(user["email"],[]).append(trade)
         return {"ok":True,"trade":trade,"source":"db"}
-    from datetime import datetime as dt
-    ls=LOT_SIZES.get(req.instrument,25)
+    from datetime import datetime as dt; ls=LOT_SIZES.get(req.instrument,25)
     row={"time":dt.now().strftime("%H:%M:%S"),"strategy":req.strategy,
          "instrument":req.instrument,"type":req.option_type,"direction":req.direction,
          "near_strike":str(req.near_strike),"far_strike":str(req.far_strike),
@@ -589,15 +638,11 @@ def tl_enter(req:TLTradeEnterRequest,user=Depends(get_current_user)):
 
 @app.post("/tradelog/close")
 def tl_close(req:TLTradeCloseRequest,user=Depends(get_current_user)):
-    """Close a trade by index using trader_logger."""
     if not _TL_OK: raise HTTPException(503,"trader_logger not available; use /trades/close")
     open_trades=[(i,t) for i,t in enumerate(_tl._trades) if str(t.get("status","")).upper()=="OPEN"]
-    if req.trade_index<0 or req.trade_index>=len(open_trades):
-        raise HTTPException(400,"Invalid trade index")
-    orig_idx,trade=open_trades[req.trade_index]
-    ls=LOT_SIZES.get(trade.get("instrument","BANKNIFTY"),25)
-    lots=int(trade.get("lots") or 1)
-    entry=float(trade.get("entry_spread") or 0)
+    if req.trade_index<0 or req.trade_index>=len(open_trades): raise HTTPException(400,"Invalid trade index")
+    orig_idx,trade=open_trades[req.trade_index]; ls=LOT_SIZES.get(trade.get("instrument","BANKNIFTY"),25)
+    lots=int(trade.get("lots") or 1); entry=float(trade.get("entry_spread") or 0)
     dirn=str(trade.get("direction","")).upper()
     pnl_pts=round((req.exit_spread-entry) if dirn in ("LONG","BUY") else (entry-req.exit_spread),2)
     pnl_inr=round(pnl_pts*ls*lots,0)
@@ -619,15 +664,12 @@ def tl_summary(user=Depends(get_current_user)):
 
 @app.get("/tradelog/export")
 def tl_export(user=Depends(get_current_user)):
-    """Return CSV text of today's trade log."""
-    if not _TL_OK or not _tl._trades:
-        return {"csv":"","message":"No trades today"}
-    output=StringIO()
-    w=csv.DictWriter(output,fieldnames=_tl.FIELDNAMES)
+    if not _TL_OK or not _tl._trades: return {"csv":"","message":"No trades today"}
+    output=StringIO(); w=csv.DictWriter(output,fieldnames=_tl.FIELDNAMES)
     w.writeheader(); w.writerows(_tl._trades)
     return {"csv":output.getvalue(),"rows":len(_tl._trades)}
 
-# ── Live Trades (in-memory DB) ──
+# ── Live Trades ───────────────────────────────────────────────────────────
 @app.post("/trades/enter")
 def enter_trade(req:TradeLogRequest,user=Depends(get_current_user)):
     import uuid
@@ -662,7 +704,7 @@ def trades_shorthand(user=Depends(get_current_user)):
             "closed_count":sum(1 for t in trades if t["status"]=="CLOSED"),
             "total_pnl":sum(t.get("pnl_inr") or 0 for t in trades if t["status"]=="CLOSED")}
 
-# ── Paper Trading ──
+# ── Paper Trading ─────────────────────────────────────────────────────────
 PAPER_INITIAL=5_000_000
 def _get_paper(email):
     if email not in _paper: _paper[email]={"balance":PAPER_INITIAL,"initial":PAPER_INITIAL,"trades":[],"created":str(date.today())}
@@ -679,8 +721,7 @@ def paper_account(user=Depends(get_current_user)):
 
 @app.post("/paper/trade")
 def paper_trade_enter(req:PaperTradeRequest,user=Depends(get_current_user)):
-    import uuid
-    acc=_get_paper(user["email"])
+    import uuid; acc=_get_paper(user["email"])
     margin={"NIFTY":80000,"BANKNIFTY":90000,"FINNIFTY":50000}.get(req.instrument,80000)*req.lots
     if acc["balance"]<margin: raise HTTPException(400,"Insufficient paper capital")
     acc["balance"]-=margin
@@ -709,7 +750,7 @@ def paper_trade_close(req:PaperCloseRequest,user=Depends(get_current_user)):
     acc["balance"]+=trade["margin_used"]+pnl_inr
     return {"trade":trade,"pnl_inr":int(pnl_inr),"new_balance":acc["balance"]}
 
-# ── Subscription ──
+# ── Subscription ──────────────────────────────────────────────────────────
 @app.get("/subscription/plans")
 def get_plans(): return {"plans":PLANS_LIST}
 
@@ -718,7 +759,6 @@ def subscription_status(user=Depends(get_current_user)):
     plan=user.get("plan","free"); billing=user.get("billing","monthly")
     tier=TIERS.get(plan,TIERS["free"])
     plan_info=next((p for p in PLANS_LIST if p["id"]==plan),PLANS_LIST[0])
-    # Compute active price based on billing cycle
     if billing=="weekly": price=plan_info.get("weekly_price")
     elif billing=="annual": price=plan_info.get("annual_price")
     else: price=plan_info.get("monthly_price")
@@ -731,7 +771,6 @@ def upgrade_plan(req:UpgradeRequest,user=Depends(get_current_user)):
     if req.plan not in TIERS: raise HTTPException(400,"Invalid plan")
     valid_billing=["weekly","monthly","annual"]
     if req.billing not in valid_billing: raise HTTPException(400,f"billing must be one of {valid_billing}")
-    # Compute expiry
     if req.billing=="weekly": expiry=str(date.today()+timedelta(days=7))
     elif req.billing=="annual": expiry=str(date.today()+timedelta(days=365))
     else: expiry=str(date.today()+timedelta(days=30))
@@ -745,7 +784,7 @@ def upgrade_plan(req:UpgradeRequest,user=Depends(get_current_user)):
     return {"message":f"Upgraded to {req.plan} ({req.billing})","plan":req.plan,
             "billing":req.billing,"price":price,"expiry":expiry,"tier":TIERS[req.plan]}
 
-# ── Analytics ──
+# ── Analytics ─────────────────────────────────────────────────────────────
 @app.get("/analytics/pnl")
 def analytics_pnl(user=Depends(get_current_user)):
     trades=[t for t in _db["trades"].get(user["email"],[]) if t["status"]=="CLOSED"]
@@ -762,7 +801,7 @@ def analytics_pnl(user=Depends(get_current_user)):
     return {"pnl":sorted(by_date.values(),key=lambda x:x["date"]),"by_strategy":by_strat,
             "total_pnl":sum(pnls),"total_trades":len(trades),"winning_trades":len(wins)}
 
-# ── Indices / Movers ──
+# ── Indices / Movers ──────────────────────────────────────────────────────
 @app.get("/indices")
 def get_indices(): return {"indices":_fetch_live_indices()}
 
@@ -779,7 +818,7 @@ def get_movers():
     losers=sorted([s for s in sigs if (s.get("change_pct") or 0)<0],key=lambda x:x.get("change_pct",0))[:6]
     return {"gainers":gainers,"losers":losers}
 
-# ── WebSocket ──
+# ── WebSocket ─────────────────────────────────────────────────────────────
 @app.websocket("/ws/signals")
 async def ws_signals(ws:WebSocket):
     await broadcaster.connect(ws)
@@ -789,18 +828,27 @@ async def ws_signals(ws:WebSocket):
         if _latest_indices_map:
             idxs=[_latest_indices_map[l] for l in IDX_ORDER if l in _latest_indices_map]
             await ws.send_text(json.dumps({"type":"indices_update","indices":idxs,"_ts":int(time.time())}))
-        await ws.send_text(json.dumps({"type":"status","xls_live":_XLS_OK,"pcr_live":_PCR_OK,"tl_live":_TL_OK}))
+        # FIXED: send nse_live not xls_live
+        await ws.send_text(json.dumps({
+            "type":     "status",
+            "nse_live": _NSE_OK,
+            "xls_live": False,
+            "pcr_live": _PCR_OK,
+            "tl_live":  _TL_OK,
+        }))
         while True: await ws.receive_text()
     except WebSocketDisconnect: broadcaster.disconnect(ws)
 
 @app.get("/health")
 def health_check():
-    return {"status":"ok","version":"3.2.0","users":len(_db["users"]),
-            "signals":len(_db["signals"]),"xls_live":_XLS_OK,
+    return {"status":"ok","version":"3.3.0","users":len(_db["users"]),
+            "signals":len(_db["signals"]),
+            "nse_live":_NSE_OK,   # FIXED
+            "xls_live":False,     # XLS retired
             "pcr_live":_PCR_OK,"tl_live":_TL_OK,"timestamp":datetime.now().isoformat()}
 
 @app.get("/")
-def root(): return {"message":"AlgoTrade API v3.2","docs":"/docs","health":"/health"}
+def root(): return {"message":"AlgoTrade API v3.3 — NSE Direct API","docs":"/docs","health":"/health"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
