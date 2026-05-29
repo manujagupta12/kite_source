@@ -1,9 +1,10 @@
 # AlgoTrade .gitignore
 
-# Secrets
+# Secrets — NEVER commit
 .env
 .env.local
 .env.*.local
+data/dhan_token.json
 
 # Python
 __pycache__/
@@ -18,16 +19,20 @@ venv/
 .venv/
 env/
 
-# Node - ALL locations
+# Node — ALL locations
 node_modules/
 **/node_modules/
-algo/node_modules/
 app/frontend/dist/
 app/frontend/.vite/
 
-# Algo junk that should never be committed
+# Algo JS junk — should never exist
 algo/package.json
 algo/package-lock.json
+algo/node_modules/
+
+# Stale root-level files
+Vite.config
+app/frontend/App.jsx
 
 # Docker
 *.tar
@@ -42,14 +47,17 @@ Thumbs.db
 *.swp
 *.swo
 
-# Data files (sensitive - mount at runtime)
+# Data files (sensitive — mount at runtime)
 data/*.xls
 data/*.xlsx
-data/*.csv
+
+# Bhavcopy cache (large — download on first run)
+data/bhavcopy_cache/
 
 # Logs
 logs/
 *.log
+data/trade_logs/
 
 # Coverage
 .coverage
