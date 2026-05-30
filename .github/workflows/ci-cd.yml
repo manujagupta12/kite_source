@@ -13,7 +13,6 @@ env:
   IMAGE_FRONTEND: ghcr.io/${{ github.repository_owner }}/algotrade-frontend
   PYTHON_VERSION: '3.11'
   NODE_VERSION: '20'
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
 
@@ -93,6 +92,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
 
     steps:
       - name: Checkout
@@ -108,7 +108,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Metadata - Backend
@@ -136,7 +136,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push - Backend
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.backend
@@ -148,7 +148,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
 
       - name: Build and push - Frontend
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.frontend
@@ -198,11 +198,10 @@ jobs:
             Dockerfile.backend \
             Dockerfile.frontend \
             nginx.conf \
-            app/backend/requirements.txt \
-            .env.example
+            app/backend/requirements.txt
 
       - name: Publish Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: "AlgoTrade ${{ github.ref_name }} - NSE F&O Signal Platform"
           body: |
