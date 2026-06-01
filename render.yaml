@@ -15,7 +15,7 @@ services:
   - type: web
     name: algotrade-backend
     runtime: python
-    region:           # closest to India
+    region:           
     plan: free
     rootDir: .
     buildCommand: pip install -r app/backend/requirements.txt
@@ -35,7 +35,7 @@ services:
   - type: web
     name: algotrade-frontend
     runtime: static
-    region: singapore
+    region: 
     plan: free
     rootDir: app/frontend
     buildCommand: npm install && npm run build
