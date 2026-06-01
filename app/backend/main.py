@@ -409,7 +409,7 @@ IDX_ORDER=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP","IT"]
 def _fetch_live_indices():
     _nse_refresh(); result=[]
     try:
-        r=_nse_sess.get("https://www.nseindia.com/api/allIndices",timeout=5)
+        r=_nse_sess.get("https://www.nseindia.com/api/allIndices",timeout=3)
         name_map={"NIFTY 50":"NIFTY","NIFTY BANK":"BANKNIFTY","NIFTY FIN SERVICE":"FINNIFTY",
                   "INDIA VIX":"VIX","NIFTY MIDCAP 100":"MIDCAP","NIFTY IT":"IT"}
         fetched={}
@@ -483,8 +483,7 @@ class Broadcaster:
 broadcaster=Broadcaster()
 
 async def indices_loop():
-    """Dedicated 2-second indices refresh — runs independently of signal_loop."""
-    global _latest_indices_map
+    """Indices refresh every 5s — NSE allIndices API."""    global _latest_indices_map
     while True:
         try:
             indices = await asyncio.get_event_loop().run_in_executor(None, _fetch_live_indices)
@@ -493,7 +492,7 @@ async def indices_loop():
                 await broadcaster.broadcast({"type": "indices_update", "indices": indices, "_ts": int(time.time())})
         except Exception as e:
             logging.debug(f"[IndicesLoop] {e}")
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
 async def signal_loop():
     cycle = 0
@@ -639,8 +638,14 @@ _NSE_INDEX_MAP = {
 }
 _NSE_INDICES_SET = set(_NSE_INDEX_MAP.keys())
 
+_chart_cache: Dict[str, dict] = {}   # {symbol: {candles, ts}}
+_CHART_TTL = 60  # seconds
+
 def _fetch_nse_intraday(symbol: str) -> list:
-    """Fetch today's 1-min intraday candles from NSE chart API. Returns [] on failure."""
+    """Fetch today's 1-min intraday candles. Cached 60s to avoid hammering NSE.""\"
+    cached = _chart_cache.get(symbol)
+    if cached and time.time() - cached["ts"] < _CHART_TTL:
+        return cached["candles"]
     _nse_refresh()
     try:
         idx_name = _NSE_INDEX_MAP.get(symbol)
@@ -648,7 +653,7 @@ def _fetch_nse_intraday(symbol: str) -> list:
             url = f"https://www.nseindia.com/api/chart-databyindex?index={idx_name.replace(' ', '%20')}&indices=true"
         else:
             url = f"https://www.nseindia.com/api/chart-databyindex?index={symbol}EQN"
-        r = _nse_sess.get(url, timeout=8)
+        r = _nse_sess.get(url, timeout=4)
         raw = r.json()
         # NSE returns {grapthData: [[epoch_ms, price], ...], closePrice: N}
         data = raw.get("grapthData") or raw.get("graphData") or []
@@ -668,6 +673,7 @@ def _fetch_nse_intraday(symbol: str) -> list:
                 "volume": 0,
             })
             prev_close = price
+        _chart_cache[symbol] = {"candles": candles, "ts": time.time()}
         return candles
     except Exception as e:
         logging.debug(f"[Chart] NSE intraday fetch failed for {symbol}: {e}")
