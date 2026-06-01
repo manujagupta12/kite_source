@@ -302,6 +302,7 @@ function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction}){
   const [candles,setCandles]=useState([]);
   const [ivl,setIvl]=useState("5");
   const [loading,setLoading]=useState(false);
+  const [src,setSrc]=useState("");
   const [visible,setVisible]=useState(false);
   const ref=useRef(null);
   useEffect(()=>{
@@ -313,11 +314,12 @@ function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction}){
     if(!visible)return;
     setLoading(true);
     api(`/chart/${symbol}?interval=${ivl}`)
-      .then(d=>{setCandles(d.candles||[]);setLoading(false);})
+      .then(d=>{setCandles(d.candles||[]);setSrc(d.source||"");setLoading(false);})
       .catch(()=>setLoading(false));
   },[symbol,ivl,visible]);
-  if(!visible||loading)return(<div className="sig-chart-wrap" ref={ref}><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>{loading?"Loading chart…":"─"}</div></div>);
-  if(!candles.length)return(<div className="sig-chart-wrap"><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>Chart unavailable — market closed or outside hours</div></div>);
+  if(!visible)return(<div className="sig-chart-wrap" ref={ref} style={{minHeight:40}}/>);
+  if(loading)return(<div className="sig-chart-wrap" ref={ref}><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>Loading…</div></div>);
+  if(!candles.length)return(<div className="sig-chart-wrap" ref={ref}><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>No data</div></div>);
   const data=candles.map(c=>({t:c.time.slice(11,16),price:c.close,open:c.open,high:c.high,low:c.low}));
   const prices=data.map(d=>d.price);
   const rawMin=Math.min(...prices);const rawMax=Math.max(...prices);
@@ -326,7 +328,7 @@ function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction}){
   const dirColor=direction==="BUY"||direction==="LONG"?"var(--grn)":"var(--red)";
   return(<div className="sig-chart-wrap" ref={ref}>
     <div className="sig-chart-header">
-      <span className="sig-chart-title">{symbol} • {ivl}m</span>
+      <span className="sig-chart-title">{symbol} • {ivl}m{src==="FALLBACK"?" • SIM":""}</span>
       <div style={{display:"flex",alignItems:"center",gap:6}}>
         <span className="sig-chart-price" style={{color:dirColor}}>₹{fmt(prices[prices.length-1],0)}</span>
         <div className="sig-chart-tabs">{["1","3","5","15","30"].map(iv=>(<div key={iv} className={`sig-chart-tab ${ivl===iv?"act":""}`} onClick={()=>setIvl(iv)}>{iv}m</div>))}</div>
