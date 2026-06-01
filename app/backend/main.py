@@ -950,18 +950,67 @@ def analytics_pnl(user=Depends(get_current_user)):
 @app.get("/indices")
 def get_indices(): return {"indices":_fetch_live_indices()}
 
+# ── Movers cache ──────────────────────────────────────────────────────────
+_movers_cache: dict = {}
+_movers_ts: float = 0.0
+
+def _fetch_movers() -> dict:
+    """Fetch top gainers/losers from NSE equity market API. Cached 60s."""
+    global _movers_cache, _movers_ts
+    if _movers_cache and time.time() - _movers_ts < 60:
+        return _movers_cache
+    _nse_refresh()
+    try:
+        # NSE provides pre-computed gainers/losers — no per-stock calls needed
+        r = _nse_sess.get(
+            "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O",
+            timeout=4)
+        data = r.json().get("data", [])
+        stocks = []
+        for item in data:
+            sym = item.get("symbol","")
+            ltp = float(item.get("lastPrice") or item.get("last") or 0)
+            chg = float(item.get("pChange") or item.get("percentChange") or 0)
+            if sym and ltp:
+                stocks.append({
+                    "symbol": sym, "ltp": round(ltp,2),
+                    "change_pct": round(chg,2),
+                    "open":  float(item.get("open") or ltp),
+                    "high":  float(item.get("dayHigh") or ltp),
+                    "low":   float(item.get("dayLow") or ltp),
+                    "prev_close": float(item.get("previousClose") or ltp),
+                    "volume": int(item.get("totalTradedVolume") or 0),
+                })
+        if stocks:
+            gainers = sorted([s for s in stocks if s["change_pct"]>0],
+                             key=lambda x: x["change_pct"], reverse=True)[:8]
+            losers  = sorted([s for s in stocks if s["change_pct"]<0],
+                             key=lambda x: x["change_pct"])[:8]
+            _movers_cache = {"gainers": gainers, "losers": losers}
+            _movers_ts = time.time()
+            return _movers_cache
+    except Exception as e:
+        logging.debug(f"[Movers] NSE fetch failed: {e}")
+
+    # Fallback: derive from existing equity signals in DB
+    eq = [s for s in _db["signals"] if s.get("market") == "EQUITY"]
+    if not eq:
+        eq = generate_equity_signals(top_n=20)
+    by_sym: dict = {}
+    for s in eq:
+        sym = s.get("symbol")
+        if sym and sym not in by_sym:
+            by_sym[sym] = s
+    sigs = list(by_sym.values())
+    gainers = sorted([s for s in sigs if (s.get("change_pct") or 0) > 0],
+                     key=lambda x: x.get("change_pct", 0), reverse=True)[:8]
+    losers  = sorted([s for s in sigs if (s.get("change_pct") or 0) < 0],
+                     key=lambda x: x.get("change_pct", 0))[:8]
+    return {"gainers": gainers, "losers": losers}
+
 @app.get("/movers")
 def get_movers():
-    eq=[s for s in _db["signals"] if s.get("market")=="EQUITY"]
-    if not eq: eq=generate_equity_signals(top_n=20)
-    by_sym:dict={}
-    for s in eq:
-        sym=s.get("symbol")
-        if sym and sym not in by_sym: by_sym[sym]=s
-    sigs=list(by_sym.values())
-    gainers=sorted([s for s in sigs if (s.get("change_pct") or 0)>0],key=lambda x:x.get("change_pct",0),reverse=True)[:6]
-    losers=sorted([s for s in sigs if (s.get("change_pct") or 0)<0],key=lambda x:x.get("change_pct",0))[:6]
-    return {"gainers":gainers,"losers":losers}
+    return _fetch_movers()
 
 # ── WebSocket ─────────────────────────────────────────────────────────────
 @app.websocket("/ws/signals")
