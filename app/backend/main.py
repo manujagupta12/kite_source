@@ -509,18 +509,18 @@ async def indices_loop():
 
 async def signal_loop():
     cycle = 0
+    # Seed with clearly-labelled demo signals so dashboard isn't empty on first load
     for inst in ["NIFTY", "BANKNIFTY", "FINNIFTY"]:
-        _db["signals"].append(_mock_fo_signal(inst))
-    for inst in ["NIFTY", "BANKNIFTY", "FINNIFTY"]:
-        _db["signals"].append(_mock_pcr_signal(inst))
+        s = _mock_fo_signal(inst); s["source"] = "DEMO"; s["reason"] = "[DEMO] Waiting for live NSE data"
+        _db["signals"].append(s)
     while True:
         await asyncio.sleep(5); cycle += 1
-        fo_sig = _nse_signal() or _mock_fo_signal()
-        _db["signals"].append(fo_sig); _db["signals"] = _db["signals"][-300:]
-        await broadcaster.broadcast({"type": "signal", "data": fo_sig})
-        pcr_mock = _mock_pcr_signal(_ROUND_ROBIN[cycle % 3])
-        _db["signals"].append(pcr_mock); _db["signals"] = _db["signals"][-300:]
-        await broadcaster.broadcast({"type": "signal", "data": pcr_mock})
+        fo_sig = _nse_signal()
+        if fo_sig:
+            fo_sig["source"] = "NSE_LIVE"
+            _db["signals"].append(fo_sig); _db["signals"] = _db["signals"][-300:]
+            await broadcaster.broadcast({"type": "signal", "data": fo_sig})
+        # PCR mock removed — only real PCR signals shown (every 3 min via _pcr_signal_live)
         if cycle % 6 == 0:
             eq = generate_equity_signals(top_n=6)
             for s in eq: _db["signals"].append(s)
