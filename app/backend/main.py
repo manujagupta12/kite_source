@@ -360,6 +360,103 @@ def _nse_signal():
 # Keep old name as alias so any external callers don't break
 _xls_signal = _nse_signal
 
+# ── Multi-strategy bridge — S1-S7 via live NSE option chain ──────────────
+def _run_all_strategies() -> list:
+    if not _NSE_OK or _loader is None: return []
+    try:
+        from algo.multistrategy import (
+            score_calendar, score_iron_condor, score_short_straddle,
+            score_momentum, score_strangle, score_expiry, score_ratio, detect_regime)
+    except ImportError:
+        return []
+    try:
+        df_raw = _loader.get_instruments("NIFTY")
+        if df_raw is None or df_raw.empty: return []
+        df = df_raw[df_raw["TYPE"]=="CE"].copy().rename(columns={
+            "STRIKE":"near_strike","BID":"near_bid","ASK":"near_ask",
+            "LTP":"near_ltp","VOLUME":"near_vol",
+            "NEAR_THETA":"near_theta","FAR_THETA":"far_theta",
+            "NEAR_VEGA":"near_vega","FAR_VEGA":"far_vega",
+            "NEAR_DELTA":"near_delta","FAR_DELTA":"far_delta",
+            "FAR_LEG":"far_prem","NEAR_LEG":"near_prem",
+        })
+        df["straddle"]    = df["near_bid"] * 2
+        df["far_strike"]  = df["near_strike"]
+        spot = _latest_indices_map.get("NIFTY",{}).get("ltp",0)
+        vix  = _latest_indices_map.get("VIX",{}).get("ltp")
+        if not spot: return []
+        atm  = int(round(spot/50)*50)
+        near_exp = None
+        try:
+            from algo.nse_fetcher import get_fetcher
+            near_exp = get_fetcher().get_expiry_dates("NIFTY")[0]
+        except Exception: pass
+        all_r = []
+        for fn, args in [
+            (score_calendar,       (df,atm,vix)),
+            (score_iron_condor,    (df,atm,vix)),
+            (score_short_straddle, (df,atm,vix)),
+            (score_momentum,       (df,atm,vix,spot)),
+            (score_strangle,       (df,atm,vix)),
+            (score_expiry,         (df,atm,vix,near_exp)),
+            (score_ratio,          (df,atm,vix)),
+        ]:
+            try: all_r.extend(fn(*args) or [])
+            except Exception as e: logging.debug(f"[MultiStrat] {fn.__name__}: {e}")
+        sigs=[]
+        for r in sorted(all_r, key=lambda x:x.get("score",0), reverse=True)[:10]:
+            rationale = _strategy_why(r, vix, spot)
+            sigs.append({
+                "id":f"ms_{r['strategy'].replace(' ','_')}_{int(time.time())}",
+                "timestamp":datetime.now().isoformat(), "source":"NSE_LIVE", "market":"FO",
+                "strategy":r["strategy"], "instrument":r.get("inst","NIFTY"),
+                "direction":r.get("direction","WAIT"), "score":r.get("score",60),
+                "risk":"LOW" if r.get("score",0)>=80 else "MEDIUM",
+                "spot":spot, "vix":vix,
+                "near_strike":r.get("near_strike",r.get("strike",atm)),
+                "far_strike":r.get("far_strike",r.get("wing_ce",atm)),
+                "reason":r.get("reason",""), "orders":r.get("orders",""),
+                "risk_note":r.get("risk_note",""),
+                "action":r.get("orders","").split("\n")[0] if r.get("orders") else "",
+                "why_it_works": rationale,
+            })
+        return sigs
+    except Exception as e:
+        logging.debug(f"[MultiStrat] error: {e}")
+        return []
+
+def _strategy_why(r:dict, vix, spot) -> str:
+    s=r.get("strategy","").upper(); v=f"VIX={vix:.1f}" if vix else ""
+    if "CALENDAR" in s:
+        dev=r.get("deviation",0); te=r.get("theta_edge",0)
+        return (f"Near-expiry theta decays faster than far-expiry. Spread is "
+                f"{abs(dev):.1f}pts {'cheap — buy it' if dev<0 else 'expensive — sell it'}. "
+                f"Theta edge {te:.4f}/day. {v}")
+    if "IRON CONDOR" in s:
+        net=r.get("net_premium",0); bu=r.get("breakeven_upper",0); bl=r.get("breakeven_lower",0)
+        return (f"Collect ₹{net:.2f} premium. NIFTY must stay between {bl:.0f}–{bu:.0f}. "
+                f"Profits from time decay in range-bound market. {v}")
+    if "STRADDLE" in s:
+        tot=r.get("total_premium",0)
+        return (f"Sell ₹{tot:.2f} premium. Profit if NIFTY stays flat. "
+                f"IV crush = instant profit. ⚠ 50% SL mandatory on each leg. {v}")
+    if "MOMENTUM" in s:
+        dirn="calls" if "BULL" in r.get("direction","") else "puts"
+        return (f"Volume skew shows {dirn} dominating — smart money positioning. "
+                f"Buy OTM for leveraged directional move. Day trade only. {v}")
+    if "STRANGLE" in s:
+        return (f"VIX elevated — volatility expansion likely. Buy OTM CE+PE. "
+                f"Profit if NIFTY makes a large move either way. Delta hedged with futures. {v}")
+    if "0DTE" in s or "EXPIRY" in s:
+        dte=r.get("dte",0); tot=r.get("total_premium",0)
+        return (f"Expiry day theta is maximum. DTE={dte}. Sell ₹{tot:.2f}. "
+                f"⚠ Gamma risk — exit compulsory by 3:20 PM. {v}")
+    if "RATIO" in s:
+        nc=r.get("net_cost",0)
+        return (f"Buy 1 ATM, sell 2 OTM. Net {'credit' if nc<0 else 'debit'} {abs(nc):.2f}pts. "
+                f"Profit in mild directional move. ⚠ Unlimited risk — strict SL needed. {v}")
+    return r.get("reason","")
+
 def _pcr_signal_live(vix=None):
     if not _PCR_OK or not _pcr_strategy: return []
     try: return _pcr_strategy.generate_all(vix=vix)
