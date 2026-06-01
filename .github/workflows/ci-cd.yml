@@ -105,10 +105,20 @@ jobs:
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
+        continue-on-error: true
+        id: ghcr-login
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.CR_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Log in to GHCR (fallback)
+        if: steps.ghcr-login.outcome == 'failure'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Metadata - Backend
         id: meta-backend
