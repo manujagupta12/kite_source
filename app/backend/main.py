@@ -642,7 +642,7 @@ _chart_cache: Dict[str, dict] = {}   # {symbol: {candles, ts}}
 _CHART_TTL = 60  # seconds
 
 def _fetch_nse_intraday(symbol: str) -> list:
-    """Fetch today's 1-min intraday candles. Cached 60s to avoid hammering NSE.""\"
+    # Fetch 1-min intraday candles. Cached 60 seconds.
     cached = _chart_cache.get(symbol)
     if cached and time.time() - cached["ts"] < _CHART_TTL:
         return cached["candles"]
