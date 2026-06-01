@@ -113,9 +113,9 @@ def start_dhan_ticker(instrument_tokens: list[int]) -> bool:
     def _run():
         global _ticker_running
         try:
-            from dhanhq import dhanhq as DhanHQ
-            # Build dhan_context required by DhanFeed v2
-            dhan_context = DhanHQ(client_id, access_token)
+            from dhanhq import DhanContext
+            # DhanContext is the correct object for DhanFeed v2
+            dhan_context = DhanContext(client_id, access_token)
 
             # Subscription: (exchange_segment, security_id, feed_type)
             subscriptions = [
