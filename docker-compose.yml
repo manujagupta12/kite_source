@@ -22,7 +22,7 @@ services:
       - PORT=8000
       - PYTHONUNBUFFERED=1
     volumes:
-      - ./data:/data:ro         # MultiTrade XLS feed (read-only mount)
+      - ./data:/data:ro         # Dhan token + trade logs (read-only mount)
       - backend-logs:/app/logs
     networks:
       - algotrade-net
