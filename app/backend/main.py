@@ -975,8 +975,18 @@ async def ws_signals(ws:WebSocket):
             "pcr_live": _PCR_OK,
             "tl_live":  _TL_OK,
         }))
-        while True: await ws.receive_text()
+        # Keepalive loop — send ping every 15s to prevent proxy timeout
+        while True:
+            try:
+                await asyncio.wait_for(ws.receive_text(), timeout=15)
+            except asyncio.TimeoutError:
+                # Send keepalive ping
+                try:
+                    await ws.send_text(json.dumps({"type":"ping","ts":int(time.time())}))
+                except Exception:
+                    break
     except WebSocketDisconnect: broadcaster.disconnect(ws)
+    except Exception: broadcaster.disconnect(ws)
 
 @app.get("/health")
 def health_check():
@@ -991,4 +1001,6 @@ def health_check():
 def root(): return {"message":"AlgoTrade API v3.4 — NSE Direct API","docs":"/docs","health":"/health"}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
+    # reload=False — reload=True kills all WebSocket connections on every file change
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False,
+                log_level="info", ws_ping_interval=20, ws_ping_timeout=30)
