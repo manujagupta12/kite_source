@@ -98,6 +98,57 @@ except Exception as e:
     _TL_OK = False; _tl = None
     logging.warning(f"[TL] trader_logger not loaded: {e}")
 
+
+# ── IST market hours ─────────────────────────────────────────────────────
+try:
+    from zoneinfo import ZoneInfo as _ZI; _IST_TZ = _ZI("Asia/Kolkata")
+except ImportError:
+    from datetime import timezone as _tz, timedelta as _td
+    _IST_TZ = _tz(_td(hours=5, minutes=30))
+
+def _ist_now():
+    return datetime.now(_IST_TZ)
+
+def _is_market_open() -> bool:
+    """True only during NSE trading hours: Mon-Fri 9:15 AM – 3:30 PM IST."""
+    n = _ist_now()
+    if n.weekday() >= 5: return False          # weekend
+    mins = n.hour * 60 + n.minute
+    return 9 * 60 + 15 <= mins <= 15 * 60 + 30
+
+def _validate_signal(sig: dict) -> bool:
+    """
+    Returns True only if signal has realistic NSE-sourced values.
+    Rejects random/mock data before it reaches the frontend.
+    """
+    if not sig: return False
+    # Source must not be mock/demo
+    src = str(sig.get("source", "")).lower()
+    if any(x in src for x in ("mock", "demo", "fake", "random", "sim")):
+        return False
+    # Score must be in valid range
+    score = sig.get("score", 0)
+    if not isinstance(score, (int, float)) or not (20 <= score <= 100):
+        return False
+    # VIX must be realistic if present
+    vix = sig.get("vix")
+    if vix is not None and not (7.0 <= float(vix) <= 50.0):
+        return False
+    # PCR must be realistic if present
+    pcr = sig.get("pcr_oi")
+    if pcr is not None and not (0.2 <= float(pcr) <= 3.0):
+        return False
+    # Spot price must be positive and realistic
+    spot = sig.get("spot") or sig.get("ltp")
+    if spot is not None and (float(spot) <= 0 or float(spot) > 10_000_000):
+        return False
+    # Must have a strategy and direction
+    if not sig.get("strategy") or not sig.get("direction"):
+        return False
+    return True
+
+_DEMO_MODE = os.environ.get("DEMO_MODE", "").lower() in ("true", "1", "yes")
+
 SECRET_KEY   = os.environ.get("SECRET_KEY", "algotrade-dev-secret-CHANGE-IN-PROD")
 ALGORITHM   = "HS256"
 TOKEN_EXPIRE = 60 * 24 * 7
@@ -536,23 +587,21 @@ def _fetch_live_indices():
     except Exception:
         pass
     if not result:
-        for lbl in IDX_ORDER:
-            prev = _latest_indices_map.get(lbl); base = prev["ltp"] if prev else BASES[lbl]
-            ltp = round(base + base*random.uniform(-0.003, 0.003), 2)
-            result.append({"label":lbl,"ltp":ltp,
-                           "change_pct":round((ltp-BASES[lbl])/BASES[lbl]*100,2),
-                           "change":round(ltp-BASES[lbl],2),
-                           "high":round(ltp*1.01,2),"low":round(ltp*0.99,2),"_ts":int(time.time())})
+        # Return last known values if available — no random data
+        result = [v for v in _latest_indices_map.values()] if _latest_indices_map else []
+        if not result:
+            return []   # Return empty — dashboard shows "Loading..." until real data arrives
     return result
 
 def generate_equity_signals(top_n=8):
-    signals=[]; now=datetime.now()
-    market_open=(now.weekday()<5 and ((now.hour==9 and now.minute>=15) or (10<=now.hour<=14) or (now.hour==15 and now.minute<=30)))
+    signals=[]; now=_ist_now()
+    market_open=_is_market_open();
+    now=_ist_now()   # use IST for all time comparisons
     stocks=random.sample(NSE_FO_STOCKS,min(25,len(NSE_FO_STOCKS)))
     for stock in stocks:
         try:
             q=_nse_equity_quote(stock); ltp=float(q.get("ltp") or 0)
-            if ltp==0: ltp=random.uniform(500,4000); q={"ltp":ltp,"change_pct":random.uniform(-3,3),"open":ltp*0.998,"high":ltp*1.012,"low":ltp*0.988,"prev_close":ltp*0.997}
+            if ltp==0: continue   # No real NSE quote — skip this stock entirely
             chg=float(q.get("change_pct") or 0); prev=float(q.get("prev_close") or ltp)
             high=float(q.get("high") or ltp*1.01); low=float(q.get("low") or ltp*0.99)
             open_=float(q.get("open") or ltp); gap_pct=(open_-prev)/prev*100 if prev else 0
@@ -602,42 +651,97 @@ async def indices_loop():
                 await broadcaster.broadcast({"type": "indices_update", "indices": indices, "_ts": int(time.time())})
         except Exception as e:
             logging.debug(f"[IndicesLoop] {e}")
-        await asyncio.sleep(10)
+        # Flash stale indicators if indices fetch failed
+        if not indices:
+            await broadcaster.broadcast({"type": "heartbeat", "nse_live": False,
+                "message": "NSE data fetch pending", "timestamp": _ist_now().isoformat()})
+        await asyncio.sleep(3 if _is_market_open() else 15)
 
 async def signal_loop():
+    """
+    Live signal engine.
+    - Market hours (9:15–15:30 IST): 3-second cycle, all strategies active
+    - Outside market hours: 60-second cycle, no new signals generated
+    - DEMO_MODE=true in .env: allows mock signals (dev/testing only)
+    - Every signal is validated before reaching the frontend
+    """
     cycle = 0
-    # Seed with clearly-labelled demo signals so dashboard isn't empty on first load
-    for inst in ["NIFTY", "BANKNIFTY", "FINNIFTY"]:
-        s = _mock_fo_signal(inst); s["source"] = "DEMO"; s["reason"] = "[DEMO] Waiting for live NSE data"
-        _db["signals"].append(s)
+    logging.info("[SignalLoop] Starting — DEMO_MODE=%s", _DEMO_MODE)
+
+    # Broadcast initial state so frontend knows we're alive
+    await broadcaster.broadcast({
+        "type": "system",
+        "market_open": _is_market_open(),
+        "nse_live": _NSE_OK,
+        "pcr_live": _PCR_OK,
+        "demo_mode": _DEMO_MODE,
+        "message": "AlgoTrade signal engine started" if _is_market_open() else "Market closed — signals will resume at 9:15 AM IST",
+    })
+
     while True:
-        await asyncio.sleep(5); cycle += 1
+        market_open = _is_market_open()
+        # Fast loop during market hours, slow outside
+        sleep_secs = 3 if market_open else 60
+        await asyncio.sleep(sleep_secs)
+        cycle += 1
+
+        if not market_open:
+            # Outside market hours: broadcast status only, no new signals
+            if cycle % 5 == 0:
+                await broadcaster.broadcast({
+                    "type": "heartbeat",
+                    "market_open": False,
+                    "nse_live": _NSE_OK,
+                    "message": "Market closed — NSE trading resumes Mon-Fri 9:15 AM IST",
+                    "timestamp": _ist_now().isoformat(),
+                })
+            continue
+
+        # ── LIVE MARKET: generate real signals ───────────────────────────
+
+        # S1 Calendar Spread — every cycle (3s)
         fo_sig = _nse_signal()
-        if fo_sig:
-            fo_sig["source"] = "NSE_LIVE"
+        if fo_sig and _validate_signal(fo_sig):
+            fo_sig["source"]   = "NSE_LIVE"
+            fo_sig["is_live"]  = True
             _db["signals"].append(fo_sig); _db["signals"] = _db["signals"][-300:]
             await broadcaster.broadcast({"type": "signal", "data": fo_sig})
-        # PCR mock removed — only real PCR signals shown (every 3 min via _pcr_signal_live)
-        if cycle % 6 == 0:
+            _tg_send(fo_sig)
+
+        # Equity signals — every 30s (10 cycles × 3s)
+        if cycle % 10 == 0:
             eq = generate_equity_signals(top_n=6)
-            for s in eq: _db["signals"].append(s)
-            _db["signals"] = _db["signals"][-300:]
-            await broadcaster.broadcast({"type": "equity_signals", "signals": eq, "count": len(eq)})
-            # Run all 7 F&O strategies every 30s
+            valid_eq = [s for s in eq if _validate_signal(s)]
+            for s in valid_eq:
+                s["is_live"] = True
+                _db["signals"].append(s)
+            if valid_eq:
+                _db["signals"] = _db["signals"][-300:]
+                await broadcaster.broadcast({"type": "equity_signals", "signals": valid_eq, "count": len(valid_eq)})
+
+            # S2-S7 multi-strategy — same 30s cadence
             ms_sigs = await asyncio.get_event_loop().run_in_executor(None, _run_all_strategies)
-            for s in ms_sigs:
+            valid_ms = [s for s in ms_sigs if _validate_signal(s)]
+            for s in valid_ms:
+                s["is_live"] = True
                 _db["signals"].append(s)
                 await broadcaster.broadcast({"type": "signal", "data": s})
-            if ms_sigs:
+            if valid_ms:
                 _db["signals"] = _db["signals"][-300:]
-                logging.info(f"[MultiStrat] {len(ms_sigs)} signals — top: {ms_sigs[0]['strategy']} score={ms_sigs[0]['score']}")
-        if cycle % 36 == 0 and _PCR_OK:
+                logging.info(f"[MultiStrat] {len(valid_ms)} validated signals")
+
+        # PCR Contrarian — every 90s (30 cycles × 3s)
+        if cycle % 30 == 0 and _PCR_OK:
             vix = _latest_indices_map.get("VIX", {}).get("ltp")
             pcr_live = await asyncio.get_event_loop().run_in_executor(None, _pcr_signal_live, vix)
-            for ps in pcr_live:
+            valid_pcr = [s for s in pcr_live if _validate_signal(s)]
+            for ps in valid_pcr:
+                ps["is_live"] = True
                 _db["signals"].append(ps)
                 await broadcaster.broadcast({"type": "signal", "data": ps})
-            if pcr_live: _db["signals"] = _db["signals"][-300:]
+                _tg_send(ps)
+            if valid_pcr:
+                _db["signals"] = _db["signals"][-300:]
         if cycle % 30 == 0:
             last = _db["signals"][-1]
             await broadcaster.broadcast({"type": "regime", "regime": last.get("regime", "UNKNOWN"), "vix": last.get("vix"), "risk": last.get("risk", "MEDIUM"), "timestamp": last.get("timestamp"), "source": last.get("source", "mock")})
@@ -696,6 +800,30 @@ def me(user=Depends(get_current_user)):
     return {k:v for k,v in user.items() if k!="password"}
 
 # ── Signals ───────────────────────────────────────────────────────────────
+
+@app.get("/signals/health")
+def signals_health():
+    """Returns data quality status — tells frontend whether signals are live or unavailable."""
+    mkt = _is_market_open()
+    live_signals  = [s for s in _db["signals"] if s.get("source","").startswith("NSE") or s.get("is_live")]
+    mock_signals  = [s for s in _db["signals"] if "mock" in str(s.get("source","")).lower() or "demo" in str(s.get("source","")).lower()]
+    total = len(_db["signals"])
+    return {
+        "market_open":      mkt,
+        "ist_time":         _ist_now().strftime("%H:%M IST"),
+        "nse_connected":    _NSE_OK,
+        "pcr_connected":    _PCR_OK,
+        "dhan_connected":   _DHAN_OK,
+        "demo_mode":        _DEMO_MODE,
+        "total_signals":    total,
+        "live_signals":     len(live_signals),
+        "mock_signals":     len(mock_signals),
+        "data_quality":     "LIVE"    if (mkt and _NSE_OK and len(live_signals) > 0) else
+                            "DELAYED" if (not mkt and len(live_signals) > 0) else
+                            "UNAVAILABLE",
+        "warning":          None if _NSE_OK else "NSE connection unavailable — no signals being generated",
+    }
+
 @app.get("/signals")
 def signals_shorthand(limit:int=50,user=Depends(get_optional_user)):
     # FIXED: expose nse_live not xls_live to frontend
@@ -740,7 +868,7 @@ async def fo_ingest(req:FoSignalIngest):
 
 @app.get("/signals/pcr")
 def pcr_signals_endpoint(symbol:str="NIFTY"):
-    if not _PCR_OK: return {"signals":[_mock_pcr_signal(symbol.upper())],"message":"PCR mock"}
+    if not _PCR_OK: return {"signals":[],"message":"PCR strategy unavailable — NSE option chain required"}
     vix=_latest_indices_map.get("VIX",{}).get("ltp")
     sig=_pcr_strategy.generate_signal(symbol.upper(),vix=vix)
     return {"signals":[sig] if sig else [],"count":1 if sig else 0,"timestamp":datetime.now().isoformat()}

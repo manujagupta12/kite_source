@@ -60,6 +60,19 @@ const PLAN_PRICES = {
   annual:  { weekly:null, monthly:null, annual:10000 },
 };
 
+
+// ── Data quality helpers ─────────────────────────────────────────────────
+function isLiveSignal(s) {
+  const src = (s.source || "").toLowerCase();
+  return s.is_live === true ||
+    src.startsWith("nse") || src === "pcr_strategy" || src === "pcr_live" ||
+    src === "calendar_algo" || src === "data_provider";
+}
+function isMockSignal(s) {
+  const src = (s.source || "").toLowerCase();
+  return src.includes("mock") || src === "demo" || src === "pcr_mock" || src === "fallback";
+}
+
 function sigFingerprint(s) {
   const tMin = (s.timestamp||"").slice(0,16);
   return `${s.market}|${s.strategy}|${s.instrument||s.symbol}|${s.direction}|${tMin}`;
@@ -516,7 +529,7 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
       <SignalMiniChart symbol={chartSymbol} direction={sig.direction}/>
       <div className="sig-action"><span style={{color:sig.direction==="LONG"||sig.direction==="BUY"?"var(--grn)":"var(--red)",fontWeight:700}}>{sig.direction}</span>{" "}{sig.instrument} — PCR {pcr!=null?Number(pcr).toFixed(3):"—"}{zone==="OVERBOUGHT"?" — Fade GREED":zone==="OVERSOLD"?" — Fade FEAR":""}</div>
       {sig.reason&&<div className="sig-reason">{sig.reason}</div>}
-      <div className="sig-foot"><div className="sig-src">📊 {sig.source||"PCR"}</div><span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log Trade</span></div>
+      <div className="sig-foot"><div className="sig-src">📊 {sig.source||"PCR"}</div>{isLiveSignal(sig)&&<span style={{fontSize:7,fontFamily:"var(--mono)",fontWeight:700,padding:"1px 5px",borderRadius:3,background:"rgba(0,255,157,.12)",color:"var(--grn)",border:"1px solid rgba(0,255,157,.25)"}}>● LIVE NSE</span>}<span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log Trade</span></div>
     </div>);
   }
 
@@ -550,7 +563,7 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
         <div className="meta-box"><div className="meta-k">VIX</div><div className="meta-v">{sig.vix||"—"}</div></div>
       </div>
       <SignalMiniChart symbol={chartSymbol} entryPrice={entryPrice} targetPrice={targetPrice} slPrice={slPrice} direction={sig.direction}/>{sig.reason&&<div className="sig-reason">{sig.reason}</div>}
-      <div className="sig-foot"><div className="sig-src">📡 {sig.source||"NSE"}</div><span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log</span><span className="log-trade-btn" style={{background:"rgba(255,61,90,.09)",borderColor:"rgba(255,61,90,.3)",color:"var(--red)"}} onClick={()=>onPlaceOrder&&onPlaceOrder(sig)}>⚡ Place</span></div>
+      <div className="sig-foot"><div className="sig-src">📡 {sig.source||"NSE"}</div>{isLiveSignal(sig)&&<span style={{fontSize:7,fontFamily:"var(--mono)",fontWeight:700,padding:"1px 5px",borderRadius:3,background:"rgba(0,255,157,.12)",color:"var(--grn)",border:"1px solid rgba(0,255,157,.25)"}}>● LIVE NSE</span>}<span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log</span><span className="log-trade-btn" style={{background:"rgba(255,61,90,.09)",borderColor:"rgba(255,61,90,.3)",color:"var(--red)"}} onClick={()=>onPlaceOrder&&onPlaceOrder(sig)}>⚡ Place</span></div>
     </div>);
   }
 
@@ -582,7 +595,7 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
       <div className="meta-box"><div className="meta-k">VIX</div><div className="meta-v">{sig.vix||"—"}</div></div>
     </div>
     <SignalMiniChart symbol={chartSymbol} entryPrice={entryPrice} targetPrice={targetPrice} slPrice={slPrice} direction={sig.direction}/>{sig.reason&&<div className="sig-reason">{sig.reason}</div>}
-    <div className="sig-foot"><div className="sig-src">📡 {sig.source||"Algo"}</div><span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log</span><span className="log-trade-btn" style={{background:"rgba(255,61,90,.09)",borderColor:"rgba(255,61,90,.3)",color:"var(--red)"}} onClick={()=>onPlaceOrder&&onPlaceOrder(sig)}>⚡ Place</span></div>
+    <div className="sig-foot"><div className="sig-src">📡 {sig.source||"Algo"}</div>{isLiveSignal(sig)&&<span style={{fontSize:7,fontFamily:"var(--mono)",fontWeight:700,padding:"1px 5px",borderRadius:3,background:"rgba(0,255,157,.12)",color:"var(--grn)",border:"1px solid rgba(0,255,157,.25)"}}>● LIVE NSE</span>}<span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log</span><span className="log-trade-btn" style={{background:"rgba(255,61,90,.09)",borderColor:"rgba(255,61,90,.3)",color:"var(--red)"}} onClick={()=>onPlaceOrder&&onPlaceOrder(sig)}>⚡ Place</span></div>
   </div>);
 }
 
@@ -591,13 +604,65 @@ function StratSegBanner({signals}){const groups=[{id:"S1",label:"Calendar",color
 function IndexTicker({indices}){if(!indices||!indices.length)return null;const items=[...indices,...indices];return(<div className="ticker-bar"><div className="ticker-inner">{items.map((idx,i)=>(<div className={`tick-item ${idx._flash||""}`} key={`${idx.label}-${i}-${idx._ts||0}`}><span className="tick-label">{idx.label}</span><span className={`tick-val ${chgClass(idx.change_pct)}`}>{idx.ltp?fmt(idx.ltp,idx.label==="VIX"?2:0):"—"}</span>{idx.change_pct!==0&&<span className={`tick-chg ${chgClass(idx.change_pct)}`} style={{background:idx.change_pct>0?"rgba(0,255,157,.1)":"rgba(255,61,90,.1)"}}>{idx.change_pct>0?"+":""}{fmt(idx.change_pct,2)}%</span>}</div>))}</div></div>);}
 function IndexStrip({indices}){const main=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP"];const shown=(indices||[]).filter(i=>main.includes(i.label));if(!shown.length)return null;return(<div className="idx-strip">{shown.map(idx=>{const up=idx.change_pct>0,dn=idx.change_pct<0;const col=up?"var(--grn)":dn?"var(--red)":"var(--muted)";return(<div className={`idx-card ${idx._flash||""}`} key={`${idx.label}-${idx._ts||0}`}><div className="idx-name">{idx.label}</div><div className="idx-ltp" style={{color:idx.ltp?col:"var(--muted)"}}>{idx.ltp?fmt(idx.ltp,idx.label==="VIX"?2:0):"Loading…"}</div><div className="idx-chg" style={{color:col}}>{idx.change_pct!==0?(idx.change_pct>0?"+":"")+fmt(idx.change_pct,2)+"%":"—"}</div>{(idx.high||idx.low)?<div className="idx-hl">H:{fmt(idx.high,0)} L:{fmt(idx.low,0)}</div>:null}</div>);})}</div>);}
 
+
+function DataQualityBanner(){
+  const [health,setHealth]=useState(null);
+  useEffect(()=>{
+    const poll=()=>api("/signals/health").then(setHealth).catch(()=>{});
+    poll();
+    const t=setInterval(poll, 10000);
+    return()=>clearInterval(t);
+  },[]);
+
+  if(!health) return null;
+
+  if(health.data_quality==="LIVE" && health.market_open){
+    return(<div style={{display:"flex",alignItems:"center",gap:8,padding:"5px 11px",
+      background:"rgba(0,255,157,.05)",border:"1px solid rgba(0,255,157,.15)",
+      borderRadius:7,marginBottom:10,fontSize:9,fontFamily:"var(--mono)"}}>
+      <span style={{width:6,height:6,borderRadius:"50%",background:"var(--grn)",
+        animation:"pulse 1s infinite",display:"inline-block"}}/>
+      <span style={{color:"var(--grn)",fontWeight:700}}>LIVE NSE DATA</span>
+      <span style={{color:"var(--muted)"}}>|</span>
+      <span style={{color:"var(--muted)"}}>Market open · All signals computed from real NSE option chain</span>
+      <span style={{marginLeft:"auto",color:"var(--muted)"}}>{health.ist_time}</span>
+    </div>);
+  }
+
+  if(health.data_quality==="UNAVAILABLE"){
+    return(<div style={{padding:"10px 14px",background:"rgba(255,61,90,.06)",
+      border:"1px solid rgba(255,61,90,.2)",borderRadius:8,marginBottom:12,
+      fontFamily:"var(--mono)",fontSize:10}}>
+      <div style={{color:"var(--red)",fontWeight:700,marginBottom:4}}>⚠ NSE DATA UNAVAILABLE</div>
+      <div style={{color:"var(--muted)",fontSize:9}}>
+        No live signals are being generated. All mock/demo signals have been hidden.
+        Signals will appear automatically once NSE connection is established during market hours (Mon–Fri 9:15–15:30 IST).
+      </div>
+    </div>);
+  }
+
+  if(!health.market_open){
+    return(<div style={{padding:"8px 12px",background:"rgba(245,197,24,.04)",
+      border:"1px solid rgba(245,197,24,.15)",borderRadius:7,marginBottom:10,
+      display:"flex",alignItems:"center",gap:8,fontSize:9,fontFamily:"var(--mono)"}}>
+      <span style={{color:"var(--yel)"}}>⏰ MARKET CLOSED</span>
+      <span style={{color:"var(--dim)"}}>|</span>
+      <span style={{color:"var(--muted)"}}>Signals from last session displayed · Live trading resumes Mon–Fri 9:15 AM IST</span>
+      <span style={{marginLeft:"auto",color:"var(--muted)"}}>{health.ist_time}</span>
+    </div>);
+  }
+  return null;
+}
+
 function SignalsTab({signals,market,strategy,indices,onClearStrategy,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
   const [showExpired,setShowExpired]=useState(false);
   const filtered=signals
+    .filter(s=>!isMockSignal(s))        // never show mock/random data
     .filter(s=>matchesMarket(s,market))
     .filter(s=>matchesStrategy(s,strategy))
     .filter(s=>showExpired||!sigIsExpired(s));
   const expiredCount=signals.filter(s=>matchesMarket(s,market)).filter(s=>matchesStrategy(s,strategy)).filter(s=>sigIsExpired(s)).length;const mktObj=MARKETS.find(m=>m.id===market);return(<div><IndexStrip indices={indices}/>{market==="ALL"&&<MoversPanel/>}{market==="ALL"&&<StratSegBanner signals={signals}/>}
+    <DataQualityBanner/>
     {!isMarketOpen()&&<div style={{background:"rgba(245,197,24,.06)",border:"1px solid rgba(245,197,24,.18)",borderRadius:7,padding:"5px 11px",marginBottom:10,fontSize:9,fontFamily:"var(--mono)",color:"var(--yel)",display:"flex",alignItems:"center",gap:7}}>
       <span>⏰</span><span>{isAfterMarketClose()?"MARKET CLOSED — signals shown are from today's session":"PRE-MARKET — live signals begin at 9:15 AM IST"}</span>
     </div>}{(market!=="ALL"||strategy)&&(<div className="filter-crumb">{market!=="ALL"&&<span style={{color:mktObj?.color||"var(--acc)"}}>{mktObj?.label||market}</span>}{market!=="ALL"&&strategy&&<span style={{color:"var(--dim)"}}>›</span>}{strategy&&<span style={{color:STRAT_INFO[skey(strategy)]?.color||"var(--acc)"}}>{strategy}</span>}<span style={{color:"var(--muted)",fontSize:9}}>&nbsp;— {filtered.length} signal{filtered.length!==1?"s":""}</span>{strategy&&<span className="filter-crumb-clear" onClick={onClearStrategy}>× Clear</span>}
@@ -1240,7 +1305,40 @@ function StrategyTrustPanel(){
   );
 }
 
-export default function App(){
+export default 
+function RiskFooter(){
+  return(<footer style={{
+    flexShrink:0,
+    background:"var(--s1)",
+    borderTop:"1px solid var(--br)",
+    padding:"10px 16px",
+    fontSize:8,
+    color:"var(--dim)",
+    fontFamily:"var(--body)",
+    lineHeight:1.6,
+    textAlign:"center",
+  }}>
+    <div style={{marginBottom:3,fontWeight:600,color:"var(--muted)",letterSpacing:".5px"}}>
+      ⚠ RISK DISCLAIMER &amp; IMPORTANT NOTICE
+    </div>
+    <div style={{maxWidth:900,margin:"0 auto"}}>
+      <strong style={{color:"var(--red)"}}>Trading in equity and F&amp;O derivatives involves substantial risk of financial loss.</strong>
+      {" "}All signals on this platform are generated by algorithms and are strictly for informational and educational purposes only.
+      {" "}They do not constitute SEBI-registered investment advice, recommendations, or solicitations to buy or sell securities.
+      {" "}Past performance of any strategy does not guarantee future results.
+      {" "}You may lose some or all of your invested capital.
+      {" "}<strong>Only invest money you can afford to lose.</strong>
+    </div>
+    <div style={{marginTop:4,color:"var(--red)",fontWeight:600}}>
+      ⚡ Stock market trading can be habit-forming and financially addictive. If trading is affecting your mental health, relationships, or finances, please seek professional guidance.
+    </div>
+    <div style={{marginTop:3,color:"var(--dim)"}}>
+      AlgoTrade is not SEBI-registered (RA registration in progress) · v2.0 · NSE F&amp;O Signals Platform
+    </div>
+  </footer>);
+}
+
+function App(){
   const [user,setUser]=useState(()=>localStorage.getItem("tok")?{tok:true}:null);
   const [signals,setSigs]=useState([]);const [regime,setRegime]=useState(null);
   const [indicesMap,setIdxMap]=useState({});
