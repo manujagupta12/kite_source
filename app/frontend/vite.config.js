@@ -10,6 +10,13 @@ export default defineConfig({
     strictPort: false,
 
     proxy: {
+      // /api/* → backend (strips /api prefix) — used by api() helper when API=""
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+      // Direct routes (nginx/docker compat)
       '/auth':         { target: 'http://localhost:8000', changeOrigin: true },
       '/signals':      { target: 'http://localhost:8000', changeOrigin: true },
       '/trades':       { target: 'http://localhost:8000', changeOrigin: true },
