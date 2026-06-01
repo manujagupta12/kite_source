@@ -6,10 +6,9 @@ export default defineConfig({
 
   server: {
     port: 5173,
-    host: true,       // bind 0.0.0.0 — accessible from LAN / other machines
-    strictPort: false, // try next port if 5173 is taken
+    host: true,
+    strictPort: false,
 
-    // Dev proxy: all API + WS calls forwarded to FastAPI backend
     proxy: {
       '/auth':         { target: 'http://localhost:8000', changeOrigin: true },
       '/signals':      { target: 'http://localhost:8000', changeOrigin: true },
@@ -26,6 +25,17 @@ export default defineConfig({
         target: 'ws://localhost:8000',
         ws: true,
         changeOrigin: true,
+        // Prevent ECONNABORTED — give backend time to start up
+        proxyTimeout: 10000,
+        timeout: 10000,
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            // Suppress noisy ECONNABORTED/ECONNREFUSED — frontend handles reconnect
+            if (!['ECONNABORTED','ECONNREFUSED','ECONNRESET'].includes(err.code)) {
+              console.error('[WS Proxy Error]', err.message)
+            }
+          })
+        },
       },
     },
   },
