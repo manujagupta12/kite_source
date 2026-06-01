@@ -827,9 +827,10 @@ export default function App(){
     if(!user)return;
     const conn=()=>{
       const ws=new WebSocket(WS);wsRef.current=ws;
-      ws.onopen=()=>setWsSt("live");
-      ws.onclose=()=>{setWsSt("reconnecting");setTimeout(conn,3000);};
-      ws.onerror=()=>setWsSt("error");
+      let _retryDelay=2000;
+      ws.onopen=()=>{setWsSt("live");_retryDelay=2000;};
+      ws.onclose=()=>{setWsSt("reconnecting");_retryDelay=Math.min(_retryDelay*1.5,15000);setTimeout(conn,_retryDelay);};
+      ws.onerror=()=>{setWsSt("reconnecting");ws.close();};
       ws.onmessage=e=>{
         try{
           const d=JSON.parse(e.data);
@@ -837,6 +838,7 @@ export default function App(){
           if(d.type==="equity_signals"&&d.signals?.length){setSigs(prev=>mergeSignals(prev.filter(s=>s.market!=="EQUITY"),d.signals));return;}
           if(d.type==="indices_update"&&d.indices?.length){setIdxMap(prev=>{const next={...prev};for(const idx of d.indices){const pl=(prev[idx.label]?.ltp)||0;const flash=pl&&idx.ltp!==pl?(idx.ltp>pl?"flash-up":"flash-dn"):"";next[idx.label]={...idx,_flash:flash,_ts:Date.now()};}return next;});setTimeout(()=>setIdxMap(prev=>{const c={...prev};for(const k of Object.keys(c))c[k]={...c[k],_flash:""};return c;}),1300);return;}
           if(d.type==="regime"){setRegime(r=>({...r,...d}));return;}
+          if(d.type==="ping"){try{ws.send(JSON.stringify({type:"pong",ts:d.ts}));}catch{}return;}
           if(d.type==="heartbeat"||d.type==="status"){
             if(d.nse_live!=null)setNseLive(!!d.nse_live);
             if(d.dhan_live!=null)setDhanLive(!!d.dhan_live);
