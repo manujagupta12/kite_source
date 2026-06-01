@@ -955,7 +955,7 @@ _movers_cache: dict = {}
 _movers_ts: float = 0.0
 
 def _fetch_movers() -> dict:
-    """Fetch top gainers/losers from NSE equity market API. Cached 60s."""
+    # Fetch top gainers/losers from NSE equity market API. Cached 60 seconds.
     global _movers_cache, _movers_ts
     if _movers_cache and time.time() - _movers_ts < 60:
         return _movers_cache
