@@ -406,18 +406,14 @@ def _nse_equity_quote(symbol):
 _latest_indices_map: Dict[str,dict]={}
 IDX_ORDER=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP","IT"]
 
-def _nsefetch(url: str) -> dict:
-    # Use nsepython which handles NSE cookies via curl/requests properly
+def _nsefetch(url: str, timeout: int = 8) -> dict:
+    # nsepython handles NSE cookies properly (confirmed working on local PC)
+    import concurrent.futures
     try:
         from nsepython import nsefetch
-        return nsefetch(url)
-    except Exception:
-        pass
-    # Fallback: raw requests session
-    try:
-        _nse_refresh()
-        r = _nse_sess.get(url, timeout=4)
-        return r.json()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(nsefetch, url)
+            return future.result(timeout=timeout)
     except Exception:
         return {}
 
@@ -509,7 +505,7 @@ async def indices_loop():
                 await broadcaster.broadcast({"type": "indices_update", "indices": indices, "_ts": int(time.time())})
         except Exception as e:
             logging.debug(f"[IndicesLoop] {e}")
-        await asyncio.sleep(5)
+        await asyncio.sleep(10)
 
 async def signal_loop():
     cycle = 0
@@ -559,6 +555,21 @@ async def lifespan(app:FastAPI):
             "password":hash_password("demo123"),"plan":"monthly","billing":"monthly",
             "joined":str(date.today()),"daily_target":50000,"plan_expiry":str(date.today()+timedelta(days=30))}
     logging.info(f"  AlgoTrade API v3.4  NSE:{_NSE_OK}  PCR:{_PCR_OK}  TradeLogger:{_TL_OK}  Dhan:{_DHAN_OK}")
+    # Warm up nsepython on startup so first indices fetch is fast
+    import threading
+    def _warmup():
+        try:
+            from nsepython import nsefetch
+            data = nsefetch("https://www.nseindia.com/api/allIndices")
+            items = data.get("data", [])
+            nifty = next((x for x in items if x.get("index") == "NIFTY 50"), None)
+            if nifty:
+                logging.info(f"[NSE] Warmup OK — NIFTY={nifty.get('last')}")
+            else:
+                logging.warning("[NSE] Warmup returned no data")
+        except Exception as e:
+            logging.warning(f"[NSE] Warmup failed: {e}")
+    threading.Thread(target=_warmup, daemon=True).start()
     if _DHAN_OK:
         # BANKNIFTY spot + near/far CE/PE tokens (standard Dhan security_ids)
         start_dhan_ticker([260105, 260106])
