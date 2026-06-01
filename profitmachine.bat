@@ -149,14 +149,20 @@ echo   STEP 3 of 3 : Checking dependencies
 echo  ----------------------------------------------------------
 echo.
 
-REM ── Python deps: only install if fastapi missing ──────────────
+REM ── Python deps: check fastapi + nsepython ──────────────────
 !PYTHON! -c "import fastapi" >nul 2>&1
 IF ERRORLEVEL 1 (
     echo  [pip] First run - installing Python packages ^(one time only^)...
     !PYTHON! -m pip install -q -r "%~dp0app\backend\requirements.txt"
     echo  [pip] Done
 ) ELSE (
-    echo  [pip] Python deps already installed - skipping
+    echo  [pip] Python deps ready
+)
+REM ── nsepython separate check (NSE option chain data) ─────────
+!PYTHON! -c "import nsepython" >nul 2>&1
+IF ERRORLEVEL 1 (
+    echo  [pip] Installing nsepython...
+    !PYTHON! -m pip install -q nsepython
 )
 
 REM ── dhanhq: only install if Dhan mode and not already present ─
