@@ -802,6 +802,7 @@ export default function App(){
   const [indicesMap,setIdxMap]=useState({});const [mkt,setMkt]=useState("ALL");
   const [strat,setStrat]=useState(null);const [openMkt,setOpenMkt]=useState(null);
   const [tab,setTab]=useState("signals");const [wsStatus,setWsSt]=useState("connecting");
+  const [nseLive,setNseLive]=useState(false);const [dhanLive,setDhanLive]=useState(false);
   const [clock,setClock]=useState(new Date());
   const [pcrHistory,setPcrHistory]=useState({NIFTY:[],BANKNIFTY:[],FINNIFTY:[]});
   const [logModal,setLogModal]=useState(null);
@@ -835,6 +836,11 @@ export default function App(){
           if(d.type==="equity_signals"&&d.signals?.length){setSigs(prev=>mergeSignals(prev.filter(s=>s.market!=="EQUITY"),d.signals));return;}
           if(d.type==="indices_update"&&d.indices?.length){setIdxMap(prev=>{const next={...prev};for(const idx of d.indices){const pl=(prev[idx.label]?.ltp)||0;next[idx.label]={...idx,_flash:pl&&idx.ltp!==pl?(idx.ltp>pl?"flash-up":"flash-dn"):"",_ts:Date.now()};}return next;});return;}
           if(d.type==="regime"){setRegime(r=>({...r,...d}));return;}
+          if(d.type==="heartbeat"||d.type==="status"){
+            if(d.nse_live!=null)setNseLive(!!d.nse_live);
+            if(d.dhan_live!=null)setDhanLive(!!d.dhan_live);
+            return;
+          }
           if(d.signals?.length)addSignals(d.signals);
           if(d.regime)setRegime(r=>({...r,...d.regime}));
         }catch{}
@@ -845,7 +851,7 @@ export default function App(){
 
   useEffect(()=>{
     if(!user)return;
-    api("/signals?limit=50").then(d=>{if(d.signals?.length)addSignals(d.signals);}).catch(()=>{});
+    api("/signals?limit=50").then(d=>{if(d.signals?.length)addSignals(d.signals);if(d.nse_live!=null)setNseLive(!!d.nse_live);if(d.dhan_live!=null)setDhanLive(!!d.dhan_live);}).catch(()=>{});
     api("/indices").then(d=>{if(d.indices?.length){const m={};for(const idx of d.indices)m[idx.label]={...idx,_flash:"",_ts:Date.now()};setIdxMap(m);}}).catch(()=>{});
     api("/signals/equity?top=15").then(d=>{if(d.signals?.length)addSignals(d.signals);}).catch(()=>{});
   },[user,addSignals]);
@@ -904,7 +910,8 @@ export default function App(){
         <IndexTicker indices={indices}/>
         <header className="topbar">
           <div className="regime-pill"><div className="pulse" style={{background:rCol}}/><span style={{color:rCol,fontWeight:700,fontSize:10}}>{regime?.regime||"DETECTING…"}</span></div>
-          <div className="src-pill"><div className="pulse" style={{background:"var(--grn)",width:5,height:5}}/>NSE · Dhan · PCR</div>
+          <div className="src-pill"><div className="pulse" style={{background:nseLive?"var(--grn)":"var(--yel)",width:5,height:5}}/>{nseLive?"NSE LIVE":"NSE..."}</div>
+          {dhanLive&&<div className="src-pill" style={{background:"rgba(0,212,255,.06)",borderColor:"rgba(0,212,255,.18)",color:"var(--acc)"}}><div className="pulse" style={{background:"var(--acc)",width:5,height:5}}/>DHAN WS</div>}
           <div className="topbar-right">
             {regime?.vix!=null&&<div className="badge" style={{color:rCol}}>VIX {regime.vix}</div>}
             {pcrCount>0&&<div className="badge" style={{color:"#22c55e",borderColor:"rgba(34,197,94,.2)"}}>PCR●{pcrCount}</div>}
