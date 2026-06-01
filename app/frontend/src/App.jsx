@@ -64,6 +64,37 @@ function sigFingerprint(s) {
   const tMin = (s.timestamp||"").slice(0,16);
   return `${s.market}|${s.strategy}|${s.instrument||s.symbol}|${s.direction}|${tMin}`;
 }
+
+// ── Signal expiry helpers (IST-aware) ────────────────────────────────────
+function getISTHourMin() {
+  const now = new Date();
+  // UTC + 5:30
+  const ist = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+  return { h: ist.getUTCHours(), m: ist.getUTCMinutes() };
+}
+function isMarketOpen() {
+  const { h, m } = getISTHourMin();
+  const day = new Date(Date.now() + 5.5*3600000).getUTCDay(); // 0=Sun,6=Sat
+  if (day === 0 || day === 6) return false;
+  const mins = h * 60 + m;
+  return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30;
+}
+function isAfterMarketClose() {
+  const { h, m } = getISTHourMin();
+  return h * 60 + m > 15 * 60 + 30;
+}
+function sigIsExpired(s) {
+  if (!s.timestamp) return false;
+  const ts = new Date(s.timestamp).getTime();
+  const age = Date.now() - ts;
+  // During market hours: expire after 30 min
+  if (isMarketOpen()) return age > 30 * 60 * 1000;
+  // After 3:30 PM IST: expire all same-day signals older than 2 hours
+  if (isAfterMarketClose()) return age > 2 * 60 * 60 * 1000;
+  // Pre-market / weekend: show for 8 hours (educational / reference)
+  return age > 8 * 60 * 60 * 1000;
+}
+
 function mergeSignals(prev, incoming) {
   const seen  = new Set(prev.map(sigFingerprint));
   const fresh = incoming.filter(s => {
@@ -428,7 +459,21 @@ function SourceBadge({source}){
   if(s==="DEMO"||s==="MOCK"||s==="PCR_MOCK")return <span className="sig-source-badge src-demo">◎ DEMO</span>;
   return <span className="sig-source-badge src-demo">◎ {s}</span>;
 }
-function SigCard({sig,pcrHistory,onLogTrade}){
+
+function sigAge(s) {
+  if (!s.timestamp) return null;
+  const mins = Math.round((Date.now() - new Date(s.timestamp).getTime()) / 60000);
+  if (mins < 1) return null;
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  return `${hrs}h ${mins % 60}m ago`;
+}
+function sigExpiredLabel(s) {
+  if (!sigIsExpired(s)) return null;
+  return <span style={{fontSize:7,fontFamily:"var(--mono)",color:"var(--red)",background:"rgba(255,61,90,.1)",border:"1px solid rgba(255,61,90,.2)",borderRadius:3,padding:"1px 5px",marginRight:4}}>EXPIRED</span>;
+}
+
+function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
   const isPcr=(sig.strategy||"").toUpperCase().includes("PCR")||sig.source==="pcr_strategy"||sig.source==="pcr_mock";
   const isEq=sig.market==="EQUITY";
   const chartSymbol=sig.instrument||sig.symbol||(isEq?sig.symbol:"BANKNIFTY");
@@ -505,7 +550,7 @@ function SigCard({sig,pcrHistory,onLogTrade}){
         <div className="meta-box"><div className="meta-k">VIX</div><div className="meta-v">{sig.vix||"—"}</div></div>
       </div>
       <SignalMiniChart symbol={chartSymbol} entryPrice={entryPrice} targetPrice={targetPrice} slPrice={slPrice} direction={sig.direction}/>{sig.reason&&<div className="sig-reason">{sig.reason}</div>}
-      <div className="sig-foot"><div className="sig-src">📡 {sig.source||"NSE"}</div><span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log Trade</span></div>
+      <div className="sig-foot"><div className="sig-src">📡 {sig.source||"NSE"}</div><span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log</span><span className="log-trade-btn" style={{background:"rgba(255,61,90,.09)",borderColor:"rgba(255,61,90,.3)",color:"var(--red)"}} onClick={()=>onPlaceOrder&&onPlaceOrder(sig)}>⚡ Place</span></div>
     </div>);
   }
 
@@ -537,7 +582,7 @@ function SigCard({sig,pcrHistory,onLogTrade}){
       <div className="meta-box"><div className="meta-k">VIX</div><div className="meta-v">{sig.vix||"—"}</div></div>
     </div>
     <SignalMiniChart symbol={chartSymbol} entryPrice={entryPrice} targetPrice={targetPrice} slPrice={slPrice} direction={sig.direction}/>{sig.reason&&<div className="sig-reason">{sig.reason}</div>}
-    <div className="sig-foot"><div className="sig-src">📡 {sig.source||"Algo"}</div><span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log Trade</span></div>
+    <div className="sig-foot"><div className="sig-src">📡 {sig.source||"Algo"}</div><span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log</span><span className="log-trade-btn" style={{background:"rgba(255,61,90,.09)",borderColor:"rgba(255,61,90,.3)",color:"var(--red)"}} onClick={()=>onPlaceOrder&&onPlaceOrder(sig)}>⚡ Place</span></div>
   </div>);
 }
 
@@ -546,7 +591,18 @@ function StratSegBanner({signals}){const groups=[{id:"S1",label:"Calendar",color
 function IndexTicker({indices}){if(!indices||!indices.length)return null;const items=[...indices,...indices];return(<div className="ticker-bar"><div className="ticker-inner">{items.map((idx,i)=>(<div className={`tick-item ${idx._flash||""}`} key={`${idx.label}-${i}-${idx._ts||0}`}><span className="tick-label">{idx.label}</span><span className={`tick-val ${chgClass(idx.change_pct)}`}>{idx.ltp?fmt(idx.ltp,idx.label==="VIX"?2:0):"—"}</span>{idx.change_pct!==0&&<span className={`tick-chg ${chgClass(idx.change_pct)}`} style={{background:idx.change_pct>0?"rgba(0,255,157,.1)":"rgba(255,61,90,.1)"}}>{idx.change_pct>0?"+":""}{fmt(idx.change_pct,2)}%</span>}</div>))}</div></div>);}
 function IndexStrip({indices}){const main=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP"];const shown=(indices||[]).filter(i=>main.includes(i.label));if(!shown.length)return null;return(<div className="idx-strip">{shown.map(idx=>{const up=idx.change_pct>0,dn=idx.change_pct<0;const col=up?"var(--grn)":dn?"var(--red)":"var(--muted)";return(<div className={`idx-card ${idx._flash||""}`} key={`${idx.label}-${idx._ts||0}`}><div className="idx-name">{idx.label}</div><div className="idx-ltp" style={{color:idx.ltp?col:"var(--muted)"}}>{idx.ltp?fmt(idx.ltp,idx.label==="VIX"?2:0):"Loading…"}</div><div className="idx-chg" style={{color:col}}>{idx.change_pct!==0?(idx.change_pct>0?"+":"")+fmt(idx.change_pct,2)+"%":"—"}</div>{(idx.high||idx.low)?<div className="idx-hl">H:{fmt(idx.high,0)} L:{fmt(idx.low,0)}</div>:null}</div>);})}</div>);}
 
-function SignalsTab({signals,market,strategy,indices,onClearStrategy,pcrHistory,onLogTrade}){const filtered=signals.filter(s=>matchesMarket(s,market)).filter(s=>matchesStrategy(s,strategy));const mktObj=MARKETS.find(m=>m.id===market);return(<div><IndexStrip indices={indices}/>{market==="ALL"&&<MoversPanel/>}{market==="ALL"&&<StratSegBanner signals={signals}/>}{(market!=="ALL"||strategy)&&(<div className="filter-crumb">{market!=="ALL"&&<span style={{color:mktObj?.color||"var(--acc)"}}>{mktObj?.label||market}</span>}{market!=="ALL"&&strategy&&<span style={{color:"var(--dim)"}}>›</span>}{strategy&&<span style={{color:STRAT_INFO[skey(strategy)]?.color||"var(--acc)"}}>{strategy}</span>}<span style={{color:"var(--muted)",fontSize:9}}>&nbsp;— {filtered.length} signal{filtered.length!==1?"s":""}</span>{strategy&&<span className="filter-crumb-clear" onClick={onClearStrategy}>× Clear</span>}</div>)}{filtered.length>0?(<div className="sigs-grid">{filtered.map((s,i)=><SigCard key={s.id||`${s.timestamp}-${i}`} sig={s} pcrHistory={pcrHistory} onLogTrade={onLogTrade}/>)}</div>):(<div className="empty"><div className="empty-ico">📊</div><div className="empty-t">No signals for this filter</div><div className="empty-s">{market!=="ALL"?`${market}${strategy?" • "+strategy:""} — 9:15–15:30`:"Backend pushes every 5s"}</div></div>)}</div>);}
+function SignalsTab({signals,market,strategy,indices,onClearStrategy,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
+  const [showExpired,setShowExpired]=useState(false);
+  const filtered=signals
+    .filter(s=>matchesMarket(s,market))
+    .filter(s=>matchesStrategy(s,strategy))
+    .filter(s=>showExpired||!sigIsExpired(s));
+  const expiredCount=signals.filter(s=>matchesMarket(s,market)).filter(s=>matchesStrategy(s,strategy)).filter(s=>sigIsExpired(s)).length;const mktObj=MARKETS.find(m=>m.id===market);return(<div><IndexStrip indices={indices}/>{market==="ALL"&&<MoversPanel/>}{market==="ALL"&&<StratSegBanner signals={signals}/>}
+    {!isMarketOpen()&&<div style={{background:"rgba(245,197,24,.06)",border:"1px solid rgba(245,197,24,.18)",borderRadius:7,padding:"5px 11px",marginBottom:10,fontSize:9,fontFamily:"var(--mono)",color:"var(--yel)",display:"flex",alignItems:"center",gap:7}}>
+      <span>⏰</span><span>{isAfterMarketClose()?"MARKET CLOSED — signals shown are from today's session":"PRE-MARKET — live signals begin at 9:15 AM IST"}</span>
+    </div>}{(market!=="ALL"||strategy)&&(<div className="filter-crumb">{market!=="ALL"&&<span style={{color:mktObj?.color||"var(--acc)"}}>{mktObj?.label||market}</span>}{market!=="ALL"&&strategy&&<span style={{color:"var(--dim)"}}>›</span>}{strategy&&<span style={{color:STRAT_INFO[skey(strategy)]?.color||"var(--acc)"}}>{strategy}</span>}<span style={{color:"var(--muted)",fontSize:9}}>&nbsp;— {filtered.length} signal{filtered.length!==1?"s":""}</span>{strategy&&<span className="filter-crumb-clear" onClick={onClearStrategy}>× Clear</span>}
+      {expiredCount>0&&<span style={{cursor:"pointer",fontSize:8,color:showExpired?"var(--red)":"var(--dim)",fontFamily:"var(--mono)",marginLeft:"auto",padding:"1px 6px",borderRadius:4,border:"1px solid rgba(255,61,90,.2)",background:"rgba(255,61,90,.05)"}} onClick={()=>setShowExpired(v=>!v)}>{showExpired?`Hide ${expiredCount} expired`:`+${expiredCount} expired`}</span>}
+    </div>)}{filtered.length>0?(<div className="sigs-grid">{filtered.map((s,i)=><SigCard key={s.id||`${s.timestamp}-${i}`} sig={s} pcrHistory={pcrHistory} onLogTrade={onLogTrade} onPlaceOrder={onPlaceOrder} userPlan={userPlan}/>)}</div>):(<div className="empty"><div className="empty-ico">📊</div><div className="empty-t">No signals for this filter</div><div className="empty-s">{market!=="ALL"?`${market}${strategy?" • "+strategy:""} — 9:15–15:30`:"Backend pushes every 5s"}</div></div>)}</div>);}
 
 function TraderLoggerTab(){
   const [data,setData]=useState(null);
@@ -557,8 +613,20 @@ function TraderLoggerTab(){
   const [msg,setMsg]=useState("");
   const [csvOpen,setCsvOpen]=useState(false);
   const [csvText,setCsvText]=useState("");
+  const [ltpMap,setLtpMap]=useState({});
   const load=()=>api("/tradelog/today").then(setData).catch(()=>{});
-  useEffect(()=>{load();},[]);
+  useEffect(()=>{
+    load();
+    // Poll indices for live LTP every 30s for MTM calculation
+    const pollMtm=()=>api("/indices").then(d=>{
+      const m={};
+      (d.indices||d||[]).forEach(idx=>{ if(idx.label)m[idx.label]=idx.ltp||0; });
+      setLtpMap(m);
+    }).catch(()=>{});
+    pollMtm();
+    const t=setInterval(()=>{load();pollMtm();},30000);
+    return()=>clearInterval(t);
+  },[]);
   const enter=async()=>{setLoading(true);setMsg("");try{const r=await api("/tradelog/enter",{method:"POST",body:JSON.stringify(form)});if(r.ok){setMsg("✓ Trade logged");load();}else setMsg(r.detail||"Error — Weekly plan+ required");}catch(e){setMsg("Error: "+e.message);}finally{setLoading(false);}}
   const closeT=async(idx)=>{setLoading(true);setMsg("");try{const r=await api("/tradelog/close",{method:"POST",body:JSON.stringify({trade_index:idx,exit_spread:parseFloat(exitSpread)||0,notes:""})});if(r.ok){setMsg(`✓ P&L: ₹${(r.pnl_inr||0).toLocaleString("en-IN")}`);setClosing(null);load();}else setMsg(r.detail||"Error");}catch(e){setMsg("Error: "+e.message);}finally{setLoading(false);}}
   const exportCsv=async()=>{const r=await api("/tradelog/export").catch(()=>({}));setCsvText(r.csv||"");setCsvOpen(true);};
@@ -605,7 +673,17 @@ function TraderLoggerTab(){
           <span style={{color:t.direction==="LONG"||t.direction==="BUY"?"var(--grn)":"var(--red)",fontFamily:"var(--mono)",fontSize:9,fontWeight:700}}>{t.direction}</span>
           <span style={{fontFamily:"var(--mono)",fontSize:10}}>{t.entry_spread}</span>
           <span style={{fontFamily:"var(--mono)",fontSize:10}}>{t.lots}</span>
-          <span className="tl-open">OPEN</span>
+          {(()=>{
+        const instLtp=ltpMap[t.instrument]||0;
+        const entrySpread=parseFloat(t.entry_spread||0);
+        const lots=parseInt(t.lots||1);
+        const lotSz={BANKNIFTY:15,NIFTY:25,FINNIFTY:40}[t.instrument]||15;
+        const dir=(t.direction==="LONG"||t.direction==="BUY");
+        const mtmPts=instLtp>0&&entrySpread>0?(dir?instLtp-entrySpread:entrySpread-instLtp):null;
+        const mtmInr=mtmPts!==null?mtmPts*lots*lotSz:null;
+        return mtmInr!==null?(<span style={{fontFamily:"var(--mono)",fontSize:9,fontWeight:700,color:mtmInr>=0?"var(--grn)":"var(--red)"}}>{mtmInr>=0?"+":""}{Math.round(mtmInr).toLocaleString("en-IN")}</span>)
+          :(<span className="tl-open">OPEN</span>);
+      })()}
           <button className="btn btn-ghost btn-sm" style={{fontSize:9}} onClick={()=>setClosing(closing===i?null:i)}>Close</button>
         </div>
         {closing===i&&(<div style={{display:"flex",gap:7,padding:"6px 10px 8px",alignItems:"center",background:"var(--s3)",borderRadius:6,marginBottom:4}}>
@@ -624,6 +702,76 @@ function TraderLoggerTab(){
 }
 
 function AnalyticsTab(){const [pnl,setPnl]=useState(null);useEffect(()=>{api("/analytics/pnl").then(setPnl).catch(()=>{});},[]);const byS=pnl?.by_strategy||{};const chart=Object.entries(byS).map(([k,v])=>({name:k.replace(/^[SE]\d\s/,"").slice(0,12),pnl:Math.round(v.total_pnl||0)}));return(<div><div className="stats-grid">{[{l:"Total P&L",v:fmtINR(pnl?.total_pnl||0),c:(pnl?.total_pnl||0)>=0?"var(--grn)":"var(--red)"},{l:"Total Trades",v:pnl?.total_trades||0,c:"var(--acc)"},{l:"Winners",v:pnl?.winning_trades||0,c:"var(--grn)"},{l:"Win Rate",v:pnl?.total_trades?Math.round((pnl.winning_trades/pnl.total_trades)*100)+"%":"—",c:"var(--yel)"}].map((s,i)=>(<div key={i} className="stat-card"><div className="stat-lbl">{s.l}</div><div className="stat-val" style={{color:s.c}}>{s.v}</div></div>))}</div>{chart.length>0?(<div className="card" style={{marginBottom:14}}><div className="card-lbl">P&amp;L by Strategy</div><ResponsiveContainer width="100%" height={190}><BarChart data={chart} margin={{top:6,right:14,bottom:6,left:0}}><CartesianGrid strokeDasharray="3 3" stroke="var(--br)"/><XAxis dataKey="name" tick={{fontSize:8,fill:"var(--muted)"}}/><YAxis tick={{fontSize:8,fill:"var(--muted)"}} tickFormatter={v=>`₹${(v/1000).toFixed(0)}k`}/><Tooltip contentStyle={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:7,fontSize:10}} formatter={v=>[`₹${Number(v).toLocaleString("en-IN")}`,"P&L"]}/><Bar dataKey="pnl" fill="var(--acc)" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div>):(<div className="empty"><div className="empty-ico">📈</div><div className="empty-t">No closed trades yet</div></div>)}</div>);}
+
+
+function PlaceOrderModal({sig,onClose,userPlan}){
+  const [lots,setLots]=useState(sig.lots_suggested||1);
+  const [confirm,setConfirm]=useState(false);
+  const [brokerStatus,setBrokerStatus]=useState(null);
+  const [result,setResult]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const isPaid=["weekly","monthly","annual"].includes(userPlan);
+  useEffect(()=>{api("/broker/status").then(setBrokerStatus).catch(()=>setBrokerStatus({ok:false,broker:"none"}));},[]);
+  const place=async()=>{
+    setLoading(true);setResult(null);
+    try{
+      const r=await api("/broker/place-from-signal",{method:"POST",body:JSON.stringify({signal:sig,lots,confirm})});
+      setResult(r);
+      if(r.ok&&confirm)setTimeout(onClose,2500);
+    }catch(e){setResult({ok:false,message:e.message});}
+    finally{setLoading(false);}
+  };
+  const LOT_SZ={BANKNIFTY:15,NIFTY:25,FINNIFTY:40};
+  const inst=sig.instrument||sig.symbol||"—";
+  const near=sig.near_strike||sig.strike;
+  const dirColor=sig.direction==="LONG"||sig.direction==="BUY"?"var(--grn)":"var(--red)";
+  return(<div style={{position:"fixed",inset:0,background:"rgba(5,12,24,.88)",zIndex:210,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+    <div style={{background:"var(--s1)",border:"1px solid var(--br2)",borderRadius:12,padding:20,width:"min(400px,100%)",maxHeight:"90vh",overflowY:"auto"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+        <div style={{fontFamily:"var(--mono)",fontSize:11,color:"var(--acc)",fontWeight:700}}>⚡ PLACE ORDER</div>
+        <span style={{cursor:"pointer",color:"var(--muted)",fontSize:18}} onClick={onClose}>×</span>
+      </div>
+      {brokerStatus&&<div style={{fontSize:9,fontFamily:"var(--mono)",padding:"4px 8px",borderRadius:5,marginBottom:10,background:brokerStatus.ok?"rgba(0,255,157,.06)":"rgba(255,61,90,.06)",color:brokerStatus.ok?"var(--grn)":"var(--red)",border:`1px solid ${brokerStatus.ok?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`}}>
+        {brokerStatus.ok?`● ${(brokerStatus.broker||"broker").toUpperCase()} CONNECTED`:"● NO BROKER — add credentials to .env"}
+        {brokerStatus.paper&&" (PAPER MODE)"}
+      </div>}
+      {!isPaid&&<div style={{background:"rgba(245,197,24,.08)",border:"1px solid rgba(245,197,24,.2)",borderRadius:7,padding:"8px 11px",fontSize:10,color:"var(--yel)",marginBottom:12}}>
+        ⚠ Live trading requires Weekly plan or above.
+      </div>}
+      <div style={{background:"var(--s2)",borderRadius:8,padding:"10px 12px",marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+          <span style={{fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:"var(--acc)"}}>{inst}</span>
+          <span style={{fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:dirColor}}>{sig.direction}</span>
+        </div>
+        {near&&<div style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>Strike: {near} {sig.option_type||"CE"}  |  {(sig.strategy||"").slice(0,14)}</div>}
+        <div style={{fontSize:9,color:"var(--muted)",marginTop:3,fontFamily:"var(--mono)"}}>Score: {sig.score}  |  Risk: {sig.risk||"MEDIUM"}</div>
+      </div>
+      <div style={{marginBottom:12}}>
+        <label style={{fontSize:9,color:"var(--muted)",display:"block",marginBottom:5}}>LOTS</label>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          <button className="btn btn-ghost btn-sm" onClick={()=>setLots(l=>Math.max(1,l-1))}>−</button>
+          <span style={{fontFamily:"var(--mono)",fontSize:18,fontWeight:700,minWidth:30,textAlign:"center"}}>{lots}</span>
+          <button className="btn btn-ghost btn-sm" onClick={()=>setLots(l=>Math.min(50,l+1))}>+</button>
+          <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>× {LOT_SZ[inst]||15} = {lots*(LOT_SZ[inst]||15)} qty</span>
+        </div>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,padding:"8px 10px",background:"rgba(255,61,90,.06)",border:"1px solid rgba(255,61,90,.15)",borderRadius:7}}>
+        <input type="checkbox" id="confirm-chk" checked={confirm} onChange={e=>setConfirm(e.target.checked)} style={{accentColor:"var(--red)"}}/>
+        <label htmlFor="confirm-chk" style={{fontSize:10,color:"var(--red)",cursor:"pointer"}}>I confirm this is a <strong>REAL ORDER</strong> — uncheck for dry-run preview</label>
+      </div>
+      {result&&<div style={{fontSize:11,padding:"7px 10px",borderRadius:6,marginBottom:10,background:result.ok?"rgba(0,255,157,.08)":"rgba(255,61,90,.08)",color:result.ok?"var(--grn)":"var(--red)",border:`1px solid ${result.ok?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`}}>
+        {result.ok?(confirm?`✓ Order placed: ${result.order_id||"OK"}`:`✓ Dry-run — broker=${result.broker}`):`✗ ${result.message}`}
+      </div>}
+      <div style={{display:"flex",gap:8}}>
+        <button className={`btn btn-sm ${confirm?"btn-danger":"btn-primary"}`} style={{flex:1}} onClick={place} disabled={loading||!isPaid}>
+          {loading?"Placing…":confirm?"🔴 Place Real Order":"👁 Preview Order"}
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
+      </div>
+      <div style={{fontSize:8,color:"var(--dim)",textAlign:"center",marginTop:8}}>Not SEBI-registered advice. Trade at your own risk.</div>
+    </div>
+  </div>);
+}
 
 function MarginBadge({onSetup}){
   const [status,setStatus]=useState(null);
@@ -852,6 +1000,13 @@ const TRUST_STRATEGIES=[
 
 function StrategyTrustPanel(){
   const [active,setActive]=useState("calendar");
+  const [liveStats,setLiveStats]=useState({});
+  useEffect(()=>{
+    // Fetch real computed backtest stats from backend
+    api("/analytics/backtest-stats").then(d=>{
+      if(d&&d.stats) setLiveStats(d.stats);
+    }).catch(()=>{});
+  },[]);
   const s=TRUST_STRATEGIES.find(x=>x.id===active);
   return(
     <div style={{fontFamily:"var(--body)"}}>
@@ -886,7 +1041,7 @@ function StrategyTrustPanel(){
               <div style={{fontSize:12,color:s.color,fontWeight:500}}>{s.tagline}</div>
             </div>
             <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
-              {[{l:"Win Rate",v:`${s.winRate}%`},{l:"Avg Return",v:s.avgReturn},{l:"Backtested",v:s.tested},{l:"Trades",v:s.trades.toLocaleString()}].map(m=>(
+              {[{l:"Win Rate",v:`${(liveStats[s.id]?.win_rate||s.winRate)}%`},{l:"Avg Return",v:liveStats[s.id]?.avg_return||s.avgReturn},{l:"Backtested",v:liveStats[s.id]?.tested||s.tested},{l:"Trades",v:(liveStats[s.id]?.trades||s.trades).toLocaleString()}].map(m=>(
                 <div key={m.l} style={{textAlign:"center"}}>
                   <div style={{fontSize:17,fontWeight:700,color:s.color,fontFamily:"var(--mono)"}}>{m.v}</div>
                   <div style={{fontSize:9,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.05em",marginTop:2}}>{m.l}</div>
@@ -898,10 +1053,10 @@ function StrategyTrustPanel(){
           {/* Win rate bar */}
           <div style={{marginBottom:18}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:5,fontSize:10,color:"var(--muted)"}}>
-              <span>Historical Win Rate</span><span style={{color:s.color,fontWeight:600}}>{s.winRate}%</span>
+              <span>Historical Win Rate</span><span style={{color:s.color,fontWeight:600}}>{liveStats[s.id]?.win_rate||s.winRate}%{liveStats[s.id]&&<span style={{fontSize:7,color:"var(--grn)",marginLeft:4}}>●LIVE</span>}</span>
             </div>
             <div style={{height:5,background:"var(--br2)",borderRadius:99,overflow:"hidden"}}>
-              <div style={{height:"100%",width:`${s.winRate}%`,background:s.color,borderRadius:99,boxShadow:`0 0 8px ${s.color}66`,transition:"width 1.2s cubic-bezier(.16,1,.3,1)"}}/>
+              <div style={{height:"100%",width:`${liveStats[s.id]?.win_rate||s.winRate}%`,background:s.color,borderRadius:99,boxShadow:`0 0 8px ${s.color}66`,transition:"width 1.2s cubic-bezier(.16,1,.3,1)"}}/>
             </div>
           </div>
 
@@ -970,13 +1125,22 @@ function StrategyTrustPanel(){
 export default function App(){
   const [user,setUser]=useState(()=>localStorage.getItem("tok")?{tok:true}:null);
   const [signals,setSigs]=useState([]);const [regime,setRegime]=useState(null);
-  const [indicesMap,setIdxMap]=useState({});const [mkt,setMkt]=useState("ALL");
-  const [strat,setStrat]=useState(null);const [openMkt,setOpenMkt]=useState(null);
-  const [tab,setTab]=useState("signals");const [wsStatus,setWsSt]=useState("connecting");
+  const [indicesMap,setIdxMap]=useState({});
+  // ── Filter memory — persists across refreshes ─────────────────
+  const [mkt,setMkt]=useState(()=>localStorage.getItem("at_mkt")||"ALL");
+  const [strat,setStrat]=useState(()=>localStorage.getItem("at_strat")||null);
+  const [tab,setTab]=useState(()=>localStorage.getItem("at_tab")||"signals");
+  const [openMkt,setOpenMkt]=useState(null);
+  // Persist filter changes
+  const setMktP  =v=>{setMkt(v);  localStorage.setItem("at_mkt",v);};
+  const setStratP=v=>{setStrat(v);v?localStorage.setItem("at_strat",v):localStorage.removeItem("at_strat");};
+  const setTabP  =v=>{setTab(v);  localStorage.setItem("at_tab",v);};
+  const [wsStatus,setWsSt]=useState("connecting");
   const [nseLive,setNseLive]=useState(false);const [dhanLive,setDhanLive]=useState(false);
   const [clock,setClock]=useState(new Date());
   const [pcrHistory,setPcrHistory]=useState({NIFTY:[],BANKNIFTY:[],FINNIFTY:[]});
   const [logModal,setLogModal]=useState(null);
+  const [placeModal,setPlaceModal]=useState(null);
   const wsRef=useRef(null);
   const IDX_ORDER=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP","IT"];
   const indices=IDX_ORDER.map(l=>indicesMap[l]).filter(Boolean);
@@ -1051,21 +1215,22 @@ export default function App(){
   const neut=signals.length-bull-bear;
   const pcrCount=signals.filter(s=>(s.strategy||"").toUpperCase().includes("PCR")||s.source==="pcr_strategy"||s.source==="pcr_mock").length;
   const foCount=signals.filter(s=>s.market==="FO"||(s.market&&s.market!=="EQUITY")).length;
-  const selectMarket=m=>{setMkt(m);setStrat(null);setTab("signals");setOpenMkt(m!=="ALL"?m:null);};
+  const selectMarket=m=>{setMktP(m);setStratP(null);setTabP("signals");setOpenMkt(m!=="ALL"?m:null);};
   const toggleDropdown=m=>{setOpenMkt(prev=>prev===m?null:m);};
-  const selectStrategy=s=>{setStrat(prev=>prev===s?null:s);setTab("signals");};
+  const selectStrategy=s=>{setStratP(prev=>prev===s?null:s);setTabP("signals");};
   const TABS=[{id:"signals",lbl:`Signals (${signals.length})`},{id:"tradelog",lbl:"Trade Log"},{id:"paper",lbl:"Paper"},{id:"analytics",lbl:"Analytics"},{id:"why",lbl:"💡 Why It Works"},{id:"subscription",lbl:"Plans"}];
   const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"tradelog",ico:"📝",lbl:"Log"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"margin",ico:"₹",lbl:"Margin"},{id:"subscription",ico:"★",lbl:"Plans"}];
 
   return(<><style>{CSS}</style>
-    {logModal&&<LogTradeModal sig={logModal} onClose={()=>setLogModal(null)} onLogged={()=>{setLogModal(null);setTab("tradelog");}}/>}
+    {logModal&&<LogTradeModal sig={logModal} onClose={()=>setLogModal(null)} onLogged={()=>{setLogModal(null);setTabP("tradelog");}}/>}
+    {placeModal&&<PlaceOrderModal sig={placeModal} userPlan={user?.plan||"free"} onClose={()=>setPlaceModal(null)}/>}
     <div className="app">
       <aside className="sidebar">
         <div className="sb-logo"><div className="logo-t">ALGOTRADE</div><div className="logo-s">NSE SIGNAL PLATFORM v1.0.0</div></div>
         <nav className="sb-nav">
           <div className="nav-sect">Navigate</div>
           {[{id:"signals",ico:"◈",lbl:"Live Signals"},{id:"tradelog",ico:"📝",lbl:"Trade Logger"},{id:"paper",ico:"📄",lbl:"Paper Trade"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"margin",ico:"₹",lbl:"Margin Setup"},{id:"why",ico:"💡",lbl:"Why It Works"},{id:"subscription",ico:"★",lbl:"Subscription"}].map(n=>(
-            <div key={n.id} className={`nav-it ${tab===n.id?"act":""}`} onClick={()=>setTab(n.id)}><span className="nav-ico">{n.ico}</span>{n.lbl}</div>
+            <div key={n.id} className={`nav-it ${tab===n.id?"act":""}`} onClick={()=>setTabP(n.id)}><span className="nav-ico">{n.ico}</span>{n.lbl}</div>
           ))}
           <div className="nav-sect">Markets</div>
           {MARKETS.map(m=>{const cnt=m.id!=="ALL"?signals.filter(s=>matchesMarket(s,m.id)).length:0;return(<div key={m.id}><div className={`mkt-btn ${mkt===m.id?"act":""}`}><div className="mkt-label-area" onClick={()=>selectMarket(m.id)}><div className="mkt-badge" style={{background:m.color+"20",color:m.color}}>{m.icon}</div><span className="mkt-name" style={{color:mkt===m.id?m.color:undefined}}>{m.label}{m.id!=="ALL"&&cnt>0&&<span style={{marginLeft:4,fontSize:7,background:m.color+"20",color:m.color,padding:"1px 4px",borderRadius:3}}>{cnt}</span>}</span></div>{m.id!=="ALL"&&<div className="mkt-chev-btn" onClick={e=>{e.stopPropagation();toggleDropdown(m.id);}}><span className={`chev ${openMkt===m.id?"open":""}`}>▾</span></div>}</div>{openMkt===m.id&&m.strategies&&(<div className="strat-list">{m.strategies.map(s=>{const k=skey(s);const info=STRAT_INFO[k]||{color:m.color};const isAct=strat===s;const c=signals.filter(sg=>matchesMarket(sg,m.id)&&matchesStrategy(sg,s)).length;return(<div key={s} className={`strat-it ${isAct?"act":""}`} onClick={()=>selectStrategy(s)}><div className="s-dot" style={{background:isAct?info.color:"var(--br)"}}/><span style={{flex:1}}>{s}</span>{c>0&&<span style={{fontSize:7,fontFamily:"var(--mono)",color:info.color,background:info.color+"18",padding:"1px 4px",borderRadius:3}}>{c}</span>}<span style={{fontSize:7,color:info.color,fontFamily:"var(--mono)",marginLeft:2}}>{info.tag}</span></div>);})}</div>)}</div>);
@@ -1088,42 +1253,16 @@ export default function App(){
           <div className="topbar-right">
             {regime?.vix!=null&&<div className="badge" style={{color:rCol}}>VIX {regime.vix}</div>}
             {pcrCount>0&&<div className="badge" style={{color:"#22c55e",borderColor:"rgba(34,197,94,.2)"}}>PCR●{pcrCount}</div>}
-            <MarginBadge onSetup={()=>setTab("margin")}/>
+            <MarginBadge onSetup={()=>setTabP("margin")}/>
             <div className="badge" style={{display:"flex",alignItems:"center",gap:4,color:wsStatus==="live"?"var(--grn)":wsStatus==="connecting"?"var(--yel)":"var(--red)"}}>{wsStatus==="live"?<><span style={{width:5,height:5,borderRadius:"50%",background:"var(--grn)",display:"inline-block",animation:"pulse 1s infinite"}}/>LIVE</>:wsStatus==="connecting"?"◌ CONN":"⚠ RECONN"}</div>
             <div className="badge" style={{color:"var(--muted)"}}><span className="live-dot"/>{IST}<span style={{color:"var(--acc)",fontWeight:700}}>.{IST_MS}</span></div>
           </div>
         </header>
         <div className="tabs">
-          {TABS.map(t=>(<div key={t.id} className={`tab ${tab===t.id?"act":""}`} onClick={()=>setTab(t.id)}>{t.lbl}</div>))}
+          {TABS.map(t=>(<div key={t.id} className={`tab ${tab===t.id?"act":""}`} onClick={()=>setTabP(t.id)}>{t.lbl}</div>))}
           {tab==="signals"&&signals.length>0&&(<div className="tab-right"><span className="count-pill" style={{background:"rgba(0,255,157,.08)",color:"var(--grn)"}}>▲{bull}</span><span className="count-pill" style={{background:"rgba(255,61,90,.08)",color:"var(--red)"}}>▼{bear}</span><span className="count-pill" style={{background:"rgba(0,212,255,.08)",color:"var(--acc)"}}>◆{neut}</span></div>)}
         </div>
         <div className="content">
-          {tab==="signals"&&<><div className="stats-grid" style={{marginBottom:12}}>{[{l:"Total",v:signals.length,c:"var(--acc)"},{l:"F&O",v:foCount,c:"var(--grn)"},{l:"PCR",v:pcrCount,c:"#22c55e"},{l:"Equity",v:signals.filter(s=>s.market==="EQUITY").length,c:"var(--pur)"}].map((s,i)=>(<div key={i} className="stat-card"><div className="stat-lbl">{s.l}</div><div className="stat-val" style={{color:s.c}}>{s.v}</div>{i===0&&<div className="stat-sub">{mkt!=="ALL"?mkt:"All"}{strat?" · "+strat:""}</div>}</div>))}</div><SignalsTab signals={signals} market={mkt} strategy={strat} indices={indices} onClearStrategy={()=>setStrat(null)} pcrHistory={pcrHistory} onLogTrade={setLogModal}/></> }
+          {tab==="signals"&&<><div className="stats-grid" style={{marginBottom:12}}>{[{l:"Total",v:signals.length,c:"var(--acc)"},{l:"F&O",v:foCount,c:"var(--grn)"},{l:"PCR",v:pcrCount,c:"#22c55e"},{l:"Equity",v:signals.filter(s=>s.market==="EQUITY").length,c:"var(--pur)"}].map((s,i)=>(<div key={i} className="stat-card"><div className="stat-lbl">{s.l}</div><div className="stat-val" style={{color:s.c}}>{s.v}</div>{i===0&&<div className="stat-sub">{mkt!=="ALL"?mkt:"All"}{strat?" · "+strat:""}</div>}</div>))}</div><SignalsTab signals={signals} market={mkt} strategy={strat} indices={indices} onClearStrategy={()=>setStratP(null)} pcrHistory={pcrHistory} onLogTrade={setLogModal} onPlaceOrder={setPlaceModal} userPlan={user?.plan||"free"}/></> }
           {tab==="tradelog"&&<TraderLoggerTab/>}
-          {tab==="analytics"&&<AnalyticsTab/>}
-          {tab==="paper"&&<PaperTab/>}
-          {tab==="margin"&&<MarginTab/>}
-          {tab==="why"&&<StrategyTrustPanel/>}
-          {tab==="subscription"&&<SubscriptionTab user={user}/>}
-        </div>
-      </div>
-      <nav className="mob-nav">{MOB_NAV.map(n=>(<div key={n.id} className={`mob-nav-it ${tab===n.id?"act":""}`} onClick={()=>setTab(n.id)}><span className="mob-nav-ico">{n.ico}</span><span className="mob-nav-lbl">{n.lbl}</span></div>))}</nav>
-    </div></>
-  );
-}
-
-function Login({onLogin}){
-  const [email,setEmail]=useState("demo@algotrade.in");
-  const [pass,setPass]=useState("demo123");
-  const [loading,setLoading]=useState(false);const [err,setErr]=useState("");
-  const go=async()=>{setLoading(true);setErr("");try{const r=await api("/auth/login",{method:"POST",body:JSON.stringify({email,password:pass})});if(r.token){localStorage.setItem("tok",r.token);onLogin({tok:true});}else setErr(r.detail||"Login failed");}catch{setErr("Cannot reach backend — is it running? (python main.py)");}finally{setLoading(false);}}
-  return(<div className="login-wrap"><div className="login-card">
-    <div className="l-logo">ALGOTRADE</div>
-    <div className="l-sub">NSE F&amp;O SIGNAL PLATFORM · v1.0.0</div>
-    {err&&<div className="err-box">{err}</div>}
-    <label className="l-lbl">Email</label><input className="l-inp" value={email} onChange={e=>setEmail(e.target.value)} type="email"/>
-    <label className="l-lbl">Password</label><input className="l-inp" value={pass} onChange={e=>setPass(e.target.value)} type="password" onKeyDown={e=>e.key==="Enter"&&go()}/>
-    <button className="l-btn" onClick={go} disabled={loading}>{loading?"Signing in…":"Sign In"}</button>
-    <div className="l-demo">demo@algotrade.in / demo123</div>
-  </div></div>);
-}
+       

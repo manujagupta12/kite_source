@@ -1,0 +1,19 @@
+{
+  "name": "AlgoTrade — NSE F&O Signals",
+  "short_name": "AlgoTrade",
+  "description": "Real-time NSE F&O signal platform with PCR, Calendar Spread, Iron Condor and more",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050c18",
+  "theme_color": "#00d4ff",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "/icons.svg",   "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "categories": ["finance", "business"],
+  "lang": "en-IN",
+  "shortcuts": [
+    { "name": "Live Signals", "url": "/", "description": "View live F&O signals" }
+  ]
+}
