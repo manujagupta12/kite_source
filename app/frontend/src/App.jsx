@@ -773,6 +773,124 @@ function PlaceOrderModal({sig,onClose,userPlan}){
   </div>);
 }
 
+
+function BrokerTab({userPlan}){
+  const [status,setStatus]=useState(null);
+  const [switching,setSwitching]=useState("");
+  const [msg,setMsg]=useState("");
+  const isPaid=["weekly","monthly","annual"].includes(userPlan);
+
+  const load=()=>api("/broker/status").then(setStatus).catch(()=>{});
+  useEffect(()=>{load();const t=setInterval(load,15000);return()=>clearInterval(t);},[]);
+
+  const switchBroker=async(name)=>{
+    setSwitching(name);setMsg("");
+    try{
+      const r=await api(`/broker/switch/${name}`);
+      setMsg(r.message||`Switched to ${name}`);
+      load();
+    }catch(e){setMsg("✗ "+e.message);}
+    finally{setSwitching("");}
+  };
+
+  const BROKERS=[
+    {id:"dhan",   name:"Dhan",    desc:"Your primary broker",         docsUrl:"https://web.dhan.co",         envKey:"DHAN_ACCESS_TOKEN",    color:"#FF6B00"},
+    {id:"kite",   name:"Kite",    desc:"Zerodha Kite Connect",        docsUrl:"https://kite.trade/connect",  envKey:"KITE_ACCESS_TOKEN",    color:"#387ED1"},
+    {id:"upstox", name:"Upstox",  desc:"Free API, popular with youth",docsUrl:"http://localhost:8000/broker/upstox-auth", envKey:"UPSTOX_ACCESS_TOKEN", color:"#6B48FF"},
+    {id:"paper",  name:"Paper",   desc:"Simulated — no real orders",  docsUrl:null,                          envKey:null,                   color:"#9E9E9E"},
+  ];
+
+  const active=status?.broker||"none";
+  const available=status?.available||{};
+
+  return(<div>
+    {/* Status header */}
+    <div style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:12,padding:"16px 18px",marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+        <span style={{fontSize:18}}>⚡</span>
+        <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--acc)"}}>BROKER STATUS</div>
+        {status&&<span style={{fontSize:9,fontFamily:"var(--mono)",padding:"2px 8px",borderRadius:10,
+          background:status.ok?"rgba(0,255,157,.1)":"rgba(255,61,90,.1)",
+          color:status.ok?"var(--grn)":"var(--red)",
+          border:`1px solid ${status.ok?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`}}>
+          {status.ok?`● ${active.toUpperCase()} ACTIVE`:"● NO BROKER"}
+        </span>}
+      </div>
+      {status?.upstox_needs_auth&&<div style={{background:"rgba(107,72,255,.08)",border:"1px solid rgba(107,72,255,.25)",borderRadius:7,padding:"8px 12px",fontSize:10,color:"#A78BFA",marginBottom:10}}>
+        ⚡ Upstox API key found but not authenticated.{" "}
+        <a href="http://localhost:8000/broker/upstox-auth" target="_blank" rel="noreferrer"
+           style={{color:"#A78BFA",fontWeight:700,textDecoration:"underline"}}>
+          Click here to connect Upstox →
+        </a>
+      </div>}
+      {!isPaid&&<div style={{background:"rgba(245,197,24,.06)",border:"1px solid rgba(245,197,24,.2)",borderRadius:7,padding:"7px 11px",fontSize:10,color:"var(--yel)"}}>
+        ⚠ Live order placement requires Weekly plan or above. Broker status visible on all plans.
+      </div>}
+    </div>
+
+    {msg&&<div style={{fontSize:11,padding:"6px 9px",borderRadius:6,marginBottom:10,
+      background:msg.startsWith("✗")?"rgba(255,61,90,.08)":"rgba(0,255,157,.08)",
+      color:msg.startsWith("✗")?"var(--red)":"var(--grn)",
+      border:`1px solid ${msg.startsWith("✗")?"rgba(255,61,90,.2)":"rgba(0,255,157,.2)"}`}}>{msg}</div>}
+
+    {/* Broker cards */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:14}}>
+      {BROKERS.map(b=>{
+        const isActive=active===b.id;
+        const isAvail=b.envKey?available[b.id]:true;
+        const isSwitching=switching===b.id;
+        return(<div key={b.id} style={{
+          background:"var(--s1)",borderRadius:10,padding:"14px",
+          border:`2px solid ${isActive?b.color:"var(--br)"}`,
+          opacity:isAvail||b.id==="paper"?1:0.6,
+          transition:"border-color .15s",
+        }}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+            <div style={{fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:b.color}}>{b.name}</div>
+            {isActive&&<span style={{fontSize:8,fontFamily:"var(--mono)",padding:"2px 6px",borderRadius:4,
+              background:b.color+"20",color:b.color,border:`1px solid ${b.color}40`}}>ACTIVE</span>}
+          </div>
+          <div style={{fontSize:10,color:"var(--muted)",marginBottom:10}}>{b.desc}</div>
+          <div style={{fontSize:9,fontFamily:"var(--mono)",marginBottom:10,
+            color:isAvail?"var(--grn)":"var(--red)"}}>
+            {b.id==="paper"?"Always available":isAvail?"● Connected":"● Not configured"}
+          </div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {!isActive&&isPaid&&<button className="btn btn-ghost btn-sm" style={{fontSize:9,flex:1}}
+              onClick={()=>switchBroker(b.id)} disabled={!!switching}>
+              {isSwitching?"Switching…":"Use this"}
+            </button>}
+            {b.id==="upstox"&&!isAvail&&b.docsUrl&&<a href={b.docsUrl} target="_blank" rel="noreferrer"
+              className="btn btn-ghost btn-sm" style={{fontSize:9,textDecoration:"none",flex:1,textAlign:"center",display:"block",padding:"5px 0"}}>
+              Connect →
+            </a>}
+            {b.id!=="upstox"&&!isAvail&&b.docsUrl&&<a href={b.docsUrl} target="_blank" rel="noreferrer"
+              className="btn btn-ghost btn-sm" style={{fontSize:9,textDecoration:"none",flex:1,textAlign:"center",display:"block",padding:"5px 0"}}>
+              Get token →
+            </a>}
+            {isActive&&<span style={{fontSize:9,color:b.color,fontFamily:"var(--mono)",padding:"5px 0"}}>✓ Using this</span>}
+          </div>
+        </div>);
+      })}
+    </div>
+
+    {/* Setup guide */}
+    <div style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:10,padding:"14px 16px"}}>
+      <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",fontWeight:700,marginBottom:10,letterSpacing:"1px"}}>SETUP GUIDE</div>
+      {[
+        ["Dhan (recommended)",   "Add DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN to .env → restart",       "#FF6B00"],
+        ["Zerodha Kite",         "Add KITE_API_KEY + KITE_ACCESS_TOKEN to .env → restart",          "#387ED1"],
+        ["Upstox",               "Add UPSTOX_API_KEY + UPSTOX_API_SECRET to .env → restart → visit /broker/upstox-auth", "#6B48FF"],
+        ["Broker priority",      "Auto-selects: Dhan first, then Kite, then Upstox, then Paper",    "#9E9E9E"],
+        ["Force broker",         "Set BROKER=dhan (or kite / upstox / paper) in .env",              "#00d4ff"],
+      ].map(([k,v,c])=>(<div key={k} style={{display:"flex",gap:10,marginBottom:7,fontSize:10}}>
+        <div style={{fontFamily:"var(--mono)",color:c,minWidth:130,fontSize:9,flexShrink:0,paddingTop:2}}>{k}</div>
+        <div style={{color:"var(--muted)",lineHeight:1.5}}>{v}</div>
+      </div>))}
+    </div>
+  </div>);
+}
+
 function MarginBadge({onSetup}){
   const [status,setStatus]=useState(null);
   useEffect(()=>{
@@ -1219,7 +1337,7 @@ export default function App(){
   const toggleDropdown=m=>{setOpenMkt(prev=>prev===m?null:m);};
   const selectStrategy=s=>{setStratP(prev=>prev===s?null:s);setTabP("signals");};
   const TABS=[{id:"signals",lbl:`Signals (${signals.length})`},{id:"tradelog",lbl:"Trade Log"},{id:"paper",lbl:"Paper"},{id:"analytics",lbl:"Analytics"},{id:"why",lbl:"💡 Why It Works"},{id:"subscription",lbl:"Plans"}];
-  const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"tradelog",ico:"📝",lbl:"Log"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"margin",ico:"₹",lbl:"Margin"},{id:"subscription",ico:"★",lbl:"Plans"}];
+  const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"tradelog",ico:"📝",lbl:"Log"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"margin",ico:"₹",lbl:"Margin"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"subscription",ico:"★",lbl:"Plans"}];
 
   return(<><style>{CSS}</style>
     {logModal&&<LogTradeModal sig={logModal} onClose={()=>setLogModal(null)} onLogged={()=>{setLogModal(null);setTabP("tradelog");}}/>}
@@ -1229,7 +1347,7 @@ export default function App(){
         <div className="sb-logo"><div className="logo-t">ALGOTRADE</div><div className="logo-s">NSE SIGNAL PLATFORM v1.0.0</div></div>
         <nav className="sb-nav">
           <div className="nav-sect">Navigate</div>
-          {[{id:"signals",ico:"◈",lbl:"Live Signals"},{id:"tradelog",ico:"📝",lbl:"Trade Logger"},{id:"paper",ico:"📄",lbl:"Paper Trade"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"margin",ico:"₹",lbl:"Margin Setup"},{id:"why",ico:"💡",lbl:"Why It Works"},{id:"subscription",ico:"★",lbl:"Subscription"}].map(n=>(
+          {[{id:"signals",ico:"◈",lbl:"Live Signals"},{id:"tradelog",ico:"📝",lbl:"Trade Logger"},{id:"paper",ico:"📄",lbl:"Paper Trade"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"margin",ico:"₹",lbl:"Margin Setup"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"why",ico:"💡",lbl:"Why It Works"},{id:"subscription",ico:"★",lbl:"Subscription"}].map(n=>(
             <div key={n.id} className={`nav-it ${tab===n.id?"act":""}`} onClick={()=>setTabP(n.id)}><span className="nav-ico">{n.ico}</span>{n.lbl}</div>
           ))}
           <div className="nav-sect">Markets</div>

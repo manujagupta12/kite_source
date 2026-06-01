@@ -1293,6 +1293,191 @@ def margin_setup(req: MarginSetupRequest, user=Depends(get_current_user)):
         "message": f"✓ Margin set to ₹{val:,.0f}",
     }
 
+
+# ── Broker endpoints ──────────────────────────────────────────────────────
+try:
+    import sys as _bsys
+    _bsys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent.parent / "algo"))
+    _bsys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent.parent / "algo"))
+    from broker import (get_broker as _get_broker, OrderRequest as _OrderReq,
+                        UpstoxBroker as _UpstoxBroker,
+                        build_calendar_basket as _cal_basket,
+                        build_iron_condor_basket as _ic_basket,
+                        PaperBroker as _PaperBroker)
+    _BROKER_OK = True
+except ImportError as _be:
+    _BROKER_OK = False
+    logging.warning(f"[Broker] Not loaded: {_be}")
+
+class BrokerOrderRequest(BaseModel):
+    instrument:  str   = "BANKNIFTY"
+    action:      str   = "BUY"
+    option_type: str   = "CE"
+    strike:      Optional[int]  = None
+    expiry:      Optional[str]  = None
+    lots:        int   = 1
+    order_type:  str   = "MARKET"
+    price:       float = 0.0
+    product:     str   = "INTRADAY"
+    confirm:     bool  = False
+
+@app.get("/broker/status")
+def broker_status(user=Depends(get_optional_user)):
+    if not _BROKER_OK:
+        return {"ok": False, "broker": "none", "message": "broker.py not loaded"}
+    b = _get_broker()
+    btype = b.__class__.__name__.replace("Broker", "").lower()
+    upstox_configured = bool(os.environ.get("UPSTOX_API_KEY"))
+    upstox_authed     = bool(os.environ.get("UPSTOX_ACCESS_TOKEN"))
+    return {
+        "ok": b.is_ready, "broker": btype, "paper": btype == "paper",
+        "available": {"dhan":   bool(os.environ.get("DHAN_ACCESS_TOKEN")),
+                      "kite":   bool(os.environ.get("KITE_ACCESS_TOKEN")),
+                      "upstox": upstox_authed},
+        "upstox_needs_auth": upstox_configured and not upstox_authed,
+    }
+
+@app.get("/broker/funds")
+def broker_funds(user=Depends(get_current_user)):
+    if not _BROKER_OK: raise HTTPException(503, "Broker not configured")
+    return _get_broker().get_funds()
+
+@app.get("/broker/positions")
+def broker_positions(user=Depends(get_current_user)):
+    if not _BROKER_OK: raise HTTPException(503, "Broker not configured")
+    return {"positions": _get_broker().get_positions()}
+
+@app.get("/broker/orders")
+def broker_orders_list(user=Depends(get_current_user)):
+    if not _BROKER_OK: raise HTTPException(503, "Broker not configured")
+    return {"orders": _get_broker().get_orders()}
+
+@app.get("/broker/upstox-auth")
+def upstox_auth_redirect():
+    """Step 1: Open this URL in browser to authenticate Upstox."""
+    if not _BROKER_OK:
+        raise HTTPException(503, "broker.py not loaded")
+    api_key = os.environ.get("UPSTOX_API_KEY", "")
+    if not api_key:
+        raise HTTPException(400, "UPSTOX_API_KEY not set in .env")
+    from fastapi.responses import RedirectResponse
+    url = _UpstoxBroker.get_auth_url()
+    logging.info(f"[Upstox] Auth redirect → {url}")
+    return RedirectResponse(url)
+
+@app.get("/broker/upstox-callback")
+def upstox_callback(code: str = ""):
+    """Step 2: Upstox redirects here with ?code=... — token saved automatically."""
+    if not code:
+        raise HTTPException(400, "No code in callback")
+    token = _UpstoxBroker.exchange_code(code)
+    if not token:
+        raise HTTPException(500, "Token exchange failed — check UPSTOX_API_SECRET in .env")
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse("""
+    <html><body style="font-family:monospace;background:#050c18;color:#00d4ff;padding:40px;text-align:center">
+    <h2>✅ Upstox Connected!</h2>
+    <p>Token saved. You can close this window and return to AlgoTrade.</p>
+    <p style="color:#00ff9d;font-size:20px">Upstox broker is now active.</p>
+    </body></html>""")
+
+@app.post("/broker/place")
+def broker_place(req: BrokerOrderRequest, user=Depends(get_current_user)):
+    plan = user.get("plan", "free")
+    if plan not in ("monthly", "annual", "weekly"):
+        raise HTTPException(403, "Live trading requires a paid plan")
+    if not _BROKER_OK:
+        raise HTTPException(503, "Broker not configured")
+    b = _get_broker()
+    LOT_SZ = {"NIFTY": 25, "BANKNIFTY": 15, "FINNIFTY": 40}
+    qty = req.lots * LOT_SZ.get(req.instrument, 15)
+    if not req.confirm:
+        return {"dry_run": True, "broker": b.__class__.__name__,
+                "order": {"instrument": req.instrument, "action": req.action,
+                          "option_type": req.option_type, "strike": req.strike,
+                          "lots": req.lots, "quantity": qty},
+                "message": "Set confirm=true to place real order"}
+    from broker import OrderRequest as OR
+    result = b.place_order(OR(
+        symbol=req.instrument, exchange="NFO", instrument_type=req.option_type,
+        strike=req.strike, expiry=req.expiry, action=req.action, quantity=qty,
+        order_type=req.order_type, price=req.price, product=req.product,
+        tag=f"AT_{user['email'][:8]}",
+    ))
+    logging.info(f"[Broker] {user['email']} {req.action} {req.instrument} {req.strike} x{qty} ok={result.ok}")
+    return {"ok": result.ok, "order_id": result.order_id,
+            "broker": result.broker, "status": result.status, "message": result.message}
+
+@app.post("/broker/place-from-signal")
+async def broker_place_signal(body: dict, user=Depends(get_current_user)):
+    plan = user.get("plan", "free")
+    if plan not in ("monthly", "annual", "weekly"):
+        raise HTTPException(403, "Live trading requires a paid plan")
+    if not _BROKER_OK:
+        raise HTTPException(503, "Broker not configured")
+    signal  = body.get("signal", {})
+    lots    = int(body.get("lots", 1))
+    confirm = bool(body.get("confirm", False))
+    b = _get_broker()
+    if not confirm:
+        return {"dry_run": True, "signal_preview": signal, "lots": lots,
+                "broker": b.__class__.__name__, "message": "Set confirm=true to place order"}
+    result = b.place_from_signal(signal, lots=lots)
+    return {"ok": result.ok, "order_id": result.order_id,
+            "broker": result.broker, "message": result.message}
+
+@app.post("/broker/place-basket")
+async def broker_place_basket(body: dict, user=Depends(get_current_user)):
+    """Place multi-leg basket orders for Calendar Spread or Iron Condor."""
+    plan = user.get("plan", "free")
+    if plan not in ("monthly", "annual", "weekly"):
+        raise HTTPException(403, "Live trading requires a paid plan")
+    if not _BROKER_OK:
+        raise HTTPException(503, "Broker not configured")
+    signal   = body.get("signal", {})
+    lots     = int(body.get("lots", 1))
+    confirm  = bool(body.get("confirm", False))
+    strategy = (signal.get("strategy") or body.get("strategy", "")).upper()
+    b = _get_broker()
+
+    # Build legs based on strategy type
+    if "CALENDAR" in strategy or "CAL" in strategy:
+        orders = _cal_basket(signal, lots)
+        label  = "Calendar Spread (2 legs)"
+    elif "CONDOR" in strategy or "IC" in strategy:
+        orders = _ic_basket(signal, lots)
+        label  = "Iron Condor (4 legs)"
+    else:
+        raise HTTPException(400, "Basket strategy not recognised. Use CALENDAR or IRON CONDOR.")
+
+    if not confirm:
+        return {"dry_run": True, "broker": b.__class__.__name__, "strategy": label,
+                "legs": len(orders), "lots": lots, "message": "Set confirm=true to place basket"}
+
+    results = b.place_basket(orders) if hasattr(b, "place_basket") else [b.place_order(o) for o in orders]
+    all_ok  = all(r.ok for r in results)
+    logging.info(f"[Broker] Basket {label} {user['email']} ok={all_ok}")
+    return {
+        "ok": all_ok, "strategy": label, "legs": len(results),
+        "results": [{"leg": i+1, "ok": r.ok, "order_id": r.order_id,
+                     "tag": orders[i].tag, "message": r.message}
+                    for i, r in enumerate(results)],
+    }
+
+@app.get("/broker/switch/{broker_name}")
+def broker_switch(broker_name: str, user=Depends(get_current_user)):
+    """Switch active broker. broker_name: dhan | kite | upstox | paper"""
+    allowed = ["dhan", "kite", "upstox", "paper"]
+    if broker_name not in allowed:
+        raise HTTPException(400, f"broker_name must be one of {allowed}")
+    if not _BROKER_OK:
+        raise HTTPException(503, "Broker not configured")
+    os.environ["BROKER"] = broker_name
+    b = _get_broker(broker_name)
+    return {"ok": b.is_ready, "broker": broker_name,
+            "active": b.__class__.__name__,
+            "message": f"Switched to {broker_name}" + (" (falling back to paper — credentials missing)" if not b.is_ready else "")}
+
 @app.get("/health")
 def health_check():
     return {"status":"ok","version":"3.4.0","users":len(_db["users"]),
