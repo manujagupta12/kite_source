@@ -58,13 +58,11 @@ class NSEFetcher:
     """
 
     def __init__(self, session_refresh_interval: int = 120):
-        """
-        Args:
-            session_refresh_interval: seconds between proactive cookie refreshes (default 5 min)
-        """
         self._session: requests.Session = None
         self._session_born: float = 0
         self._refresh_interval = session_refresh_interval
+        self._fail_count: int = 0          # consecutive failures
+        self._backoff_until: float = 0     # epoch time to stop backing off
         self._init_session()
 
     # ── Session management ────────────────────────────────────
@@ -313,33 +311,46 @@ class NSEFetcher:
     # ── Internal ──────────────────────────────────────────────
 
     def _fetch_raw(self, symbol: str) -> Optional[dict]:
-        """Fetch raw option chain JSON. Uses nsepython (handles NSE cookies) with requests fallback."""
+        """Fetch raw option chain JSON with circuit breaker to prevent 404 spam."""
         sym = symbol.upper()
 
-        # Primary: nsepython — handles NSE session/cookies automatically
+        # Circuit breaker — back off for 5 min after 3 consecutive failures
+        if self._fail_count >= 3:
+            if time.time() < self._backoff_until:
+                return None  # silent — already logged
+            else:
+                self._fail_count = 0  # reset after backoff
+
+        # Primary: nsepython
         try:
             from nsepython import nse_optionchain_scrapper
             data = nse_optionchain_scrapper(sym)
             if data and data.get("records"):
+                self._fail_count = 0
                 return data
         except Exception as e:
-            print(f"[NSEFetcher] nsepython failed for {sym}: {e}")
+            if "No module" not in str(e):
+                print(f"[NSEFetcher] nsepython failed for {sym}: {e}")
 
-        # Fallback: raw requests with session
+        # Fallback: raw requests
         self._ensure_session()
-        if sym in _INDEX_SYMBOLS:
-            url = _BASE + _OC_INDEX.format(sym=sym)
-        else:
-            url = _BASE + _OC_EQUITY.format(sym=sym)
+        url = _BASE + (_OC_INDEX if sym in _INDEX_SYMBOLS else _OC_EQUITY).format(sym=sym)
         try:
             r = self._session.get(url, timeout=10)
             r.raise_for_status()
             data = r.json()
             if data.get("records"):
+                self._fail_count = 0
                 return data
-            self._init_session()
         except Exception as e:
-            print(f"[NSEFetcher] Error fetching {sym}: {e}")
+            pass  # fall through to failure handling
+
+        # Both failed
+        self._fail_count += 1
+        if self._fail_count == 1:
+            print(f"[NSEFetcher] Option chain unavailable for {sym} — NSE may be blocking. Retrying in 5 min.")
+        if self._fail_count >= 3:
+            self._backoff_until = time.time() + 300
         return None
 
 
