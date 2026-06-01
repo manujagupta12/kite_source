@@ -383,7 +383,7 @@ _nse_sess=_req.Session(); _nse_sess_ts=0.0
 
 def _nse_refresh():
     global _nse_sess,_nse_sess_ts
-    if time.time()-_nse_sess_ts>60:
+    if time.time()-_nse_sess_ts>30:
         try:
             _nse_sess=_req.Session()
             _nse_sess.headers.update({"User-Agent":"Mozilla/5.0","Accept":"application/json","Referer":"https://www.nseindia.com"})
@@ -482,53 +482,58 @@ class Broadcaster:
 
 broadcaster=Broadcaster()
 
-async def signal_loop():
+async def indices_loop():
+    """Dedicated 2-second indices refresh — runs independently of signal_loop."""
     global _latest_indices_map
-    cycle=0
-    for inst in ["NIFTY","BANKNIFTY","FINNIFTY"]:
+    while True:
+        try:
+            indices = await asyncio.get_event_loop().run_in_executor(None, _fetch_live_indices)
+            if indices:
+                _latest_indices_map = {idx["label"]: idx for idx in indices}
+                await broadcaster.broadcast({"type": "indices_update", "indices": indices, "_ts": int(time.time())})
+        except Exception as e:
+            logging.debug(f"[IndicesLoop] {e}")
+        await asyncio.sleep(2)
+
+async def signal_loop():
+    cycle = 0
+    for inst in ["NIFTY", "BANKNIFTY", "FINNIFTY"]:
         _db["signals"].append(_mock_fo_signal(inst))
-    for inst in ["NIFTY","BANKNIFTY","FINNIFTY"]:
+    for inst in ["NIFTY", "BANKNIFTY", "FINNIFTY"]:
         _db["signals"].append(_mock_pcr_signal(inst))
     while True:
-        await asyncio.sleep(5); cycle+=1
-        # FIXED: use _nse_signal() not _xls_signal()
+        await asyncio.sleep(5); cycle += 1
         fo_sig = _nse_signal() or _mock_fo_signal()
-        _db["signals"].append(fo_sig); _db["signals"]=_db["signals"][-300:]
-        await broadcaster.broadcast({"type":"signal","data":fo_sig})
-        pcr_mock=_mock_pcr_signal(_ROUND_ROBIN[cycle%3])
-        _db["signals"].append(pcr_mock); _db["signals"]=_db["signals"][-300:]
-        await broadcaster.broadcast({"type":"signal","data":pcr_mock})
-        if cycle%2==0:
-            indices=await asyncio.get_event_loop().run_in_executor(None,_fetch_live_indices)
-            if indices:
-                _latest_indices_map={idx["label"]:idx for idx in indices}
-                await broadcaster.broadcast({"type":"indices_update","indices":indices,"_ts":int(time.time())})
-        if cycle%6==0:
-            eq=generate_equity_signals(top_n=6)
+        _db["signals"].append(fo_sig); _db["signals"] = _db["signals"][-300:]
+        await broadcaster.broadcast({"type": "signal", "data": fo_sig})
+        pcr_mock = _mock_pcr_signal(_ROUND_ROBIN[cycle % 3])
+        _db["signals"].append(pcr_mock); _db["signals"] = _db["signals"][-300:]
+        await broadcaster.broadcast({"type": "signal", "data": pcr_mock})
+        if cycle % 6 == 0:
+            eq = generate_equity_signals(top_n=6)
             for s in eq: _db["signals"].append(s)
-            _db["signals"]=_db["signals"][-300:]
-            await broadcaster.broadcast({"type":"equity_signals","signals":eq,"count":len(eq)})
-        if cycle%36==0 and _PCR_OK:
-            vix=_latest_indices_map.get("VIX",{}).get("ltp")
-            pcr_live=await asyncio.get_event_loop().run_in_executor(None,_pcr_signal_live,vix)
+            _db["signals"] = _db["signals"][-300:]
+            await broadcaster.broadcast({"type": "equity_signals", "signals": eq, "count": len(eq)})
+        if cycle % 36 == 0 and _PCR_OK:
+            vix = _latest_indices_map.get("VIX", {}).get("ltp")
+            pcr_live = await asyncio.get_event_loop().run_in_executor(None, _pcr_signal_live, vix)
             for ps in pcr_live:
                 _db["signals"].append(ps)
-                await broadcaster.broadcast({"type":"signal","data":ps})
-            if pcr_live: _db["signals"]=_db["signals"][-300:]
-        if cycle%30==0:
-            last=_db["signals"][-1]
-            await broadcaster.broadcast({"type":"regime","regime":last.get("regime","UNKNOWN"),"vix":last.get("vix"),"risk":last.get("risk","MEDIUM"),"timestamp":last.get("timestamp"),"source":last.get("source","mock")})
-        if cycle%12==0:
-            # FIXED: nse_live now reflects actual NSE connectivity, not hardcoded False
+                await broadcaster.broadcast({"type": "signal", "data": ps})
+            if pcr_live: _db["signals"] = _db["signals"][-300:]
+        if cycle % 30 == 0:
+            last = _db["signals"][-1]
+            await broadcaster.broadcast({"type": "regime", "regime": last.get("regime", "UNKNOWN"), "vix": last.get("vix"), "risk": last.get("risk", "MEDIUM"), "timestamp": last.get("timestamp"), "source": last.get("source", "mock")})
+        if cycle % 12 == 0:
             await broadcaster.broadcast({
-                "type":       "heartbeat",
-                "xls_live":   False,
-                "nse_live":   _NSE_OK,
-                "dhan_live":  _DHAN_OK,
-                "pcr_live":   _PCR_OK,
-                "tl_live":    _TL_OK,
-                "signals_n":  len(_db["signals"]),
-                "timestamp":  datetime.now().isoformat(),
+                "type":      "heartbeat",
+                "xls_live":  False,
+                "nse_live":  _NSE_OK,
+                "dhan_live": _DHAN_OK,
+                "pcr_live":  _PCR_OK,
+                "tl_live":   _TL_OK,
+                "signals_n": len(_db["signals"]),
+                "timestamp": datetime.now().isoformat(),
             })
 
 @asynccontextmanager
@@ -542,7 +547,8 @@ async def lifespan(app:FastAPI):
         # BANKNIFTY spot + near/far CE/PE tokens (standard Dhan security_ids)
         start_dhan_ticker([260105, 260106])
         logging.info("[Dhan] WebSocket ticker started")
-    task=asyncio.create_task(signal_loop())
+    asyncio.create_task(indices_loop())
+    asyncio.create_task(signal_loop())
     yield
     task.cancel()
 
