@@ -112,19 +112,29 @@ def start_dhan_ticker(instrument_tokens: list[int]) -> bool:
 
     def _run():
         global _ticker_running
-        # Build subscription list: [(exchange_segment, security_id, feed_type), ...]
-        # Using FULL feed for bid/ask + OI + greeks
-        subscriptions = [
-            (marketfeed.NSE_FNO, str(token), marketfeed.Full)
-            for token in instrument_tokens
-        ]
         try:
+            from dhanhq import dhanhq as DhanHQ
+            # Build dhan_context required by DhanFeed v2
+            dhan_context = DhanHQ(client_id, access_token)
+
+            # Subscription: (exchange_segment, security_id, feed_type)
+            subscriptions = [
+                (marketfeed.NSE_FNO, str(token), marketfeed.Full)
+                for token in instrument_tokens
+            ]
+
+            def _on_ticks(data):
+                try:
+                    ticks = data if isinstance(data, list) else [data]
+                    _tick_store.update(ticks)
+                except Exception:
+                    pass
+
             feed = marketfeed.DhanFeed(
-                client_id,
-                access_token,
+                dhan_context,
                 subscriptions,
                 version="v2",
-                on_ticks=lambda ws, ticks: _tick_store.update(ticks),
+                on_ticks=_on_ticks,
             )
             _ticker_running = True
             print(f"[DhanTicker] Connected — subscribed to {len(subscriptions)} instruments")
