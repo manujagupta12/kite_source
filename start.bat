@@ -95,6 +95,8 @@ IF ERRORLEVEL 1 (
 ) ELSE (
     echo  [OK] Python deps ready
 )
+!PYTHON! -c "import nsepython" >nul 2>&1
+IF ERRORLEVEL 1 (!PYTHON! -m pip install -q nsepython)
 
 REM ── Node deps: skip if node_modules exists ────────────────────
 cd /d "%~dp0app\frontend"
