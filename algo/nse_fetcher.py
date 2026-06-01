@@ -313,35 +313,33 @@ class NSEFetcher:
     # ── Internal ──────────────────────────────────────────────
 
     def _fetch_raw(self, symbol: str) -> Optional[dict]:
-        """Fetch raw JSON from NSE. Retries once on 403 with session refresh."""
-        self._ensure_session()
+        """Fetch raw option chain JSON. Uses nsepython (handles NSE cookies) with requests fallback."""
         sym = symbol.upper()
+
+        # Primary: nsepython — handles NSE session/cookies automatically
+        try:
+            from nsepython import nse_optionchain_scrapper
+            data = nse_optionchain_scrapper(sym)
+            if data and data.get("records"):
+                return data
+        except Exception as e:
+            print(f"[NSEFetcher] nsepython failed for {sym}: {e}")
+
+        # Fallback: raw requests with session
+        self._ensure_session()
         if sym in _INDEX_SYMBOLS:
             url = _BASE + _OC_INDEX.format(sym=sym)
         else:
             url = _BASE + _OC_EQUITY.format(sym=sym)
-
-        for attempt in range(2):
-            try:
-                r = self._session.get(url, timeout=10)
-                if r.status_code == 403:
-                    # Session expired — refresh and retry once
-                    self._init_session()
-                    continue
-                r.raise_for_status()
-                data = r.json()
-                if data.get("records"):
-                    return data
-                # Empty response — session may be stale
-                self._init_session()
-            except requests.exceptions.Timeout:
-                print(f"[NSEFetcher] Timeout fetching {sym} (attempt {attempt+1})")
-            except requests.exceptions.ConnectionError as e:
-                print(f"[NSEFetcher] Connection error: {e}")
-                break
-            except Exception as e:
-                print(f"[NSEFetcher] Error fetching {sym}: {e}")
-                break
+        try:
+            r = self._session.get(url, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            if data.get("records"):
+                return data
+            self._init_session()
+        except Exception as e:
+            print(f"[NSEFetcher] Error fetching {sym}: {e}")
         return None
 
 
