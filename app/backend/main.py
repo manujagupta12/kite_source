@@ -526,6 +526,14 @@ async def signal_loop():
             for s in eq: _db["signals"].append(s)
             _db["signals"] = _db["signals"][-300:]
             await broadcaster.broadcast({"type": "equity_signals", "signals": eq, "count": len(eq)})
+            # Run all 7 F&O strategies every 30s
+            ms_sigs = await asyncio.get_event_loop().run_in_executor(None, _run_all_strategies)
+            for s in ms_sigs:
+                _db["signals"].append(s)
+                await broadcaster.broadcast({"type": "signal", "data": s})
+            if ms_sigs:
+                _db["signals"] = _db["signals"][-300:]
+                logging.info(f"[MultiStrat] {len(ms_sigs)} signals — top: {ms_sigs[0]['strategy']} score={ms_sigs[0]['score']}")
         if cycle % 36 == 0 and _PCR_OK:
             vix = _latest_indices_map.get("VIX", {}).get("ltp")
             pcr_live = await asyncio.get_event_loop().run_in_executor(None, _pcr_signal_live, vix)
