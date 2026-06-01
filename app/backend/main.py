@@ -628,25 +628,115 @@ def pcr_signals_endpoint(symbol:str="NIFTY"):
     sig=_pcr_strategy.generate_signal(symbol.upper(),vix=vix)
     return {"signals":[sig] if sig else [],"count":1 if sig else 0,"timestamp":datetime.now().isoformat()}
 
+# ── NSE intraday chart endpoint ────────────────────────────────────────────
+_NSE_INDEX_MAP = {
+    "NIFTY":    "NIFTY 50",
+    "NIFTY50":  "NIFTY 50",
+    "BANKNIFTY":"NIFTY BANK",
+    "FINNIFTY": "NIFTY FIN SERVICE",
+    "MIDCAP":   "NIFTY MIDCAP 100",
+    "VIX":      "India VIX",
+}
+_NSE_INDICES_SET = set(_NSE_INDEX_MAP.keys())
+
+def _fetch_nse_intraday(symbol: str) -> list:
+    """Fetch today's 1-min intraday candles from NSE chart API. Returns [] on failure."""
+    _nse_refresh()
+    try:
+        idx_name = _NSE_INDEX_MAP.get(symbol)
+        if idx_name:
+            url = f"https://www.nseindia.com/api/chart-databyindex?index={idx_name.replace(' ', '%20')}&indices=true"
+        else:
+            url = f"https://www.nseindia.com/api/chart-databyindex?index={symbol}EQN"
+        r = _nse_sess.get(url, timeout=8)
+        raw = r.json()
+        # NSE returns {grapthData: [[epoch_ms, price], ...], closePrice: N}
+        data = raw.get("grapthData") or raw.get("graphData") or []
+        if not data:
+            return []
+        candles = []
+        prev_close = float(data[0][1]) if data else 0
+        for point in data:
+            ts_ms, price = point[0], float(point[1])
+            ts = datetime.fromtimestamp(ts_ms / 1000)
+            candles.append({
+                "time": ts.strftime("%Y-%m-%dT%H:%M:%S"),
+                "open": round(prev_close, 2),
+                "high": round(max(prev_close, price) * (1 + 0.0002), 2),
+                "low":  round(min(prev_close, price) * (1 - 0.0002), 2),
+                "close": round(price, 2),
+                "volume": 0,
+            })
+            prev_close = price
+        return candles
+    except Exception as e:
+        logging.debug(f"[Chart] NSE intraday fetch failed for {symbol}: {e}")
+        return []
+
+def _resample_candles(candles: list, interval_min: int) -> list:
+    """Resample 1-min candles into N-min candles."""
+    if interval_min <= 1 or not candles:
+        return candles
+    resampled = []
+    bucket: list = []
+    for c in candles:
+        bucket.append(c)
+        if len(bucket) >= interval_min:
+            resampled.append({
+                "time":   bucket[0]["time"],
+                "open":   bucket[0]["open"],
+                "high":   max(x["high"] for x in bucket),
+                "low":    min(x["low"]  for x in bucket),
+                "close":  bucket[-1]["close"],
+                "volume": sum(x["volume"] for x in bucket),
+            })
+            bucket = []
+    if bucket:  # last partial bucket
+        resampled.append({
+            "time":   bucket[0]["time"],
+            "open":   bucket[0]["open"],
+            "high":   max(x["high"] for x in bucket),
+            "low":    min(x["low"]  for x in bucket),
+            "close":  bucket[-1]["close"],
+            "volume": sum(x["volume"] for x in bucket),
+        })
+    return resampled
+
+def _fallback_candles(symbol: str, interval: int, n: int = 60) -> list:
+    """Realistic fallback using last known LTP as anchor (not random walk from base)."""
+    BASES = {"NIFTY":24500,"BANKNIFTY":53000,"FINNIFTY":23000,"VIX":14.5}
+    # Use last known live price as anchor if available
+    live = _latest_indices_map.get(symbol, {})
+    base = float(live.get("ltp") or BASES.get(symbol, 1000))
+    candles = []; now = datetime.now(); price = base
+    for i in range(n, 0, -1):
+        ts = now - timedelta(minutes=interval * i)
+        o = round(price, 2)
+        chg = random.uniform(-0.003, 0.003)  # tighter walk ±0.3%
+        c = round(price * (1 + chg), 2)
+        h = round(max(o, c) * (1 + random.uniform(0, 0.002)), 2)
+        l = round(min(o, c) * (1 - random.uniform(0, 0.002)), 2)
+        candles.append({"time": ts.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "open": o, "high": h, "low": l, "close": c, "volume": random.randint(10000, 200000)})
+        price = c
+    return candles
+
 @app.get("/chart/{symbol}")
-def get_chart_data(symbol:str, interval:str="5"):
-    symbol=symbol.upper()
-    BASES={"NIFTY":24500,"BANKNIFTY":53000,"FINNIFTY":23000,"NIFTY50":24500,"VIX":14.5}
-    base=BASES.get(symbol,1000)
-    candles=[]; now=datetime.now(); price=base
-    for i in range(60,0,-1):
-        ts=now-timedelta(minutes=int(interval)*i)
-        open_=round(price,2); chg=random.uniform(-0.008,0.008)
-        close=round(price*(1+chg),2)
-        high=round(max(open_,close)*(1+random.uniform(0,0.004)),2)
-        low=round(min(open_,close)*(1-random.uniform(0,0.004)),2)
-        vol=random.randint(50000,500000)
-        candles.append({"time":ts.strftime("%Y-%m-%dT%H:%M:%S"),
-                        "open":open_,"high":high,"low":low,"close":close,"volume":vol})
-        price=close
-    current_price=candles[-1]["close"] if candles else base
-    return {"symbol":symbol,"interval":interval,"candles":candles,
-            "current_price":current_price,"timestamp":datetime.now().isoformat()}
+def get_chart_data(symbol: str, interval: str = "5"):
+    symbol = symbol.upper()
+    ivl = max(1, int(interval)) if interval.isdigit() else 5
+    # Try live NSE intraday data first
+    candles_1m = _fetch_nse_intraday(symbol)
+    if candles_1m:
+        candles = _resample_candles(candles_1m, ivl)
+        source = "NSE_LIVE"
+    else:
+        candles = _fallback_candles(symbol, ivl)
+        source = "FALLBACK"
+    current_price = candles[-1]["close"] if candles else 0
+    return {"symbol": symbol, "interval": interval, "candles": candles,
+            "current_price": current_price, "source": source,
+            "timestamp": datetime.now().isoformat()}
 
 # ── Trader Logger ─────────────────────────────────────────────────────────
 @app.get("/tradelog/today")
