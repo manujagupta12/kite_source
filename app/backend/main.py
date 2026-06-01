@@ -47,6 +47,36 @@ except ImportError:
 # Legacy alias kept so any remaining code that checks _XLS_OK still works
 _XLS_OK = _NSE_OK
 
+# ── Dhan token wiring ──────────────────────────────────────────────────────
+# Wire the token from env BEFORE anything tries to use it.
+# The Dhan token you provided is stored via save_token_manual or .env.
+_DHAN_CLIENT_ID    = "1111872026"   # extracted from JWT payload
+_DHAN_ACCESS_TOKEN = os.environ.get("DHAN_ACCESS_TOKEN", "").strip()
+if _DHAN_ACCESS_TOKEN:
+    os.environ.setdefault("DHAN_CLIENT_ID", _DHAN_CLIENT_ID)
+    logging.info(f"[Dhan] Token found in env (client_id={_DHAN_CLIENT_ID})")
+else:
+    # Fallback: try token file (written by dhan_auth.save_token_manual)
+    _dhan_token_file = Path(__file__).parent.parent.parent / "data" / "dhan_token.json"
+    if _dhan_token_file.exists():
+        try:
+            import json as _json
+            _dt = _json.loads(_dhan_token_file.read_text())
+            os.environ.setdefault("DHAN_CLIENT_ID",    _dt.get("client_id", ""))
+            os.environ.setdefault("DHAN_ACCESS_TOKEN", _dt.get("access_token", ""))
+            logging.info("[Dhan] Token loaded from dhan_token.json")
+        except Exception as _de:
+            logging.warning(f"[Dhan] Token file read error: {_de}")
+    else:
+        logging.warning("[Dhan] No DHAN_ACCESS_TOKEN in env — running on NSE polling only")
+
+try:
+    from algo.dhan_ticker import start_dhan_ticker, is_running as _dhan_is_running
+    _DHAN_OK = bool(os.environ.get("DHAN_ACCESS_TOKEN"))
+except ImportError:
+    _DHAN_OK = False
+    logging.warning("[DhanTicker] Module not found")
+
 try:
     from pcr_strategy import PCRStrategy, NseOiFetcher
     _pcr_fetcher = NseOiFetcher(); _pcr_strategy = PCRStrategy(_pcr_fetcher); _PCR_OK = True
@@ -483,13 +513,14 @@ async def signal_loop():
         if cycle%12==0:
             # FIXED: nse_live now reflects actual NSE connectivity, not hardcoded False
             await broadcaster.broadcast({
-                "type":      "heartbeat",
-                "xls_live":  False,          # XLS permanently retired
-                "nse_live":  _NSE_OK,        # FIXED: true when data_provider loaded
-                "pcr_live":  _PCR_OK,
-                "tl_live":   _TL_OK,
-                "signals_n": len(_db["signals"]),
-                "timestamp": datetime.now().isoformat(),
+                "type":       "heartbeat",
+                "xls_live":   False,
+                "nse_live":   _NSE_OK,
+                "dhan_live":  _DHAN_OK,
+                "pcr_live":   _PCR_OK,
+                "tl_live":    _TL_OK,
+                "signals_n":  len(_db["signals"]),
+                "timestamp":  datetime.now().isoformat(),
             })
 
 @asynccontextmanager
@@ -498,12 +529,16 @@ async def lifespan(app:FastAPI):
         _db["users"]["demo@algotrade.in"]={"name":"Demo User","email":"demo@algotrade.in",
             "password":hash_password("demo123"),"plan":"monthly","billing":"monthly",
             "joined":str(date.today()),"daily_target":50000,"plan_expiry":str(date.today()+timedelta(days=30))}
-    logging.info(f"  AlgoTrade API v3.3  NSE:{_NSE_OK}  PCR:{_PCR_OK}  TradeLogger:{_TL_OK}")
+    logging.info(f"  AlgoTrade API v3.4  NSE:{_NSE_OK}  PCR:{_PCR_OK}  TradeLogger:{_TL_OK}  Dhan:{_DHAN_OK}")
+    if _DHAN_OK:
+        # BANKNIFTY spot + near/far CE/PE tokens (standard Dhan security_ids)
+        start_dhan_ticker([260105, 260106])
+        logging.info("[Dhan] WebSocket ticker started")
     task=asyncio.create_task(signal_loop())
     yield
     task.cancel()
 
-app=FastAPI(title="AlgoTrade API",version="3.3.0",lifespan=lifespan)
+app=FastAPI(title="AlgoTrade API",version="3.4.0",lifespan=lifespan)
 app.add_middleware(CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
@@ -841,14 +876,15 @@ async def ws_signals(ws:WebSocket):
 
 @app.get("/health")
 def health_check():
-    return {"status":"ok","version":"3.3.0","users":len(_db["users"]),
+    return {"status":"ok","version":"3.4.0","users":len(_db["users"]),
             "signals":len(_db["signals"]),
-            "nse_live":_NSE_OK,   # FIXED
-            "xls_live":False,     # XLS retired
+            "nse_live":_NSE_OK,
+            "dhan_live":_DHAN_OK,
+            "xls_live":False,
             "pcr_live":_PCR_OK,"tl_live":_TL_OK,"timestamp":datetime.now().isoformat()}
 
 @app.get("/")
-def root(): return {"message":"AlgoTrade API v3.3 — NSE Direct API","docs":"/docs","health":"/health"}
+def root(): return {"message":"AlgoTrade API v3.4 — NSE Direct API","docs":"/docs","health":"/health"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
