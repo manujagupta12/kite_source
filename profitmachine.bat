@@ -253,4 +253,39 @@ REM ── Backend ────────────────────�
 start "AlgoTrade API" cmd /k "SET PATH=!PATH! && SET AVAILABLE_MARGIN=!AVAILABLE_MARGIN! && SET DHAN_CLIENT_ID=!DHAN_CLIENT_ID! && SET DHAN_ACCESS_TOKEN=!DHAN_ACCESS_TOKEN! && title AlgoTrade API v2.0 && cd /d "%~dp0app\backend" && !PYTHON! main.py"
 timeout /t 3 /nobreak >nul
 
-REM ── Frontend ─────�
+REM ── Frontend ──────────────────────────────────────────────────
+start "AlgoTrade Dashboard" cmd /k "SET PATH=!PATH! && title AlgoTrade Dashboard v2.0 && cd /d "%~dp0app\frontend" && !NPM! run dev -- --force"
+timeout /t 4 /nobreak >nul
+
+REM ── Dhan Ticker ───────────────────────────────────────────────
+IF "!DHAN_MODE!"=="DHAN_WS" (
+    start "Dhan Ticker" cmd /k "SET PATH=!PATH! && SET DHAN_CLIENT_ID=!DHAN_CLIENT_ID! && SET DHAN_ACCESS_TOKEN=!DHAN_ACCESS_TOKEN! && title Dhan WebSocket Ticker && cd /d "%~dp0" && !PYTHON! -c "from algo.dhan_ticker import start_dhan_ticker; import time; start_dhan_ticker([260105,256265]); print('[Dhan] Running'); [time.sleep(60) for _ in iter(int,1)]""
+)
+
+REM ── Algo ──────────────────────────────────────────────────────
+IF "%CHOICE%"=="1" (
+    start "Calendar Algo" cmd /k "SET PATH=!PATH! && SET AVAILABLE_MARGIN=!AVAILABLE_MARGIN! && title Calendar Spread Algo && cd /d "%~dp0" && !PYTHON! algo\Calendaralgofinal.py"
+)
+IF "%CHOICE%"=="2" (
+    start "Multi-Strategy" cmd /k "SET PATH=!PATH! && SET AVAILABLE_MARGIN=!AVAILABLE_MARGIN! && title Multi-Strategy Algo && cd /d "%~dp0" && !PYTHON! algo\multistrategy.py"
+)
+
+timeout /t 2 /nobreak >nul
+start "" "http://localhost:5173"
+
+echo.
+echo  ==========================================================
+echo   DONE - Platform is running
+echo.
+echo   Dashboard : http://localhost:5173
+echo   API       : http://localhost:8000/docs
+echo   Login     : demo@algotrade.in / demo123
+echo   Margin    : Rs.!AVAILABLE_MARGIN!
+IF "!DHAN_MODE!"=="DHAN_WS" (
+echo   Dhan WS   : ENABLED
+) ELSE (
+echo   Dhan WS   : OFF  (add token to .env to enable)
+)
+echo  ==========================================================
+echo.
+pause

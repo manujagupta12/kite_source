@@ -1123,4 +1123,7 @@ function Login({onLogin}){
     {err&&<div className="err-box">{err}</div>}
     <label className="l-lbl">Email</label><input className="l-inp" value={email} onChange={e=>setEmail(e.target.value)} type="email"/>
     <label className="l-lbl">Password</label><input className="l-inp" value={pass} onChange={e=>setPass(e.target.value)} type="password" onKeyDown={e=>e.key==="Enter"&&go()}/>
-    <button className="l-btn" onClick={go} disabled={loading}>{loading?"Signing in…":"Sign In"
+    <button className="l-btn" onClick={go} disabled={loading}>{loading?"Signing in…":"Sign In"}</button>
+    <div className="l-demo">demo@algotrade.in / demo123</div>
+  </div></div>);
+}
