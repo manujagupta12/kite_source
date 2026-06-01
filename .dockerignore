@@ -1,20 +1,22 @@
-# FIX 8: dockerignore was missing - Docker COPY was pulling in
-# algo/node_modules (1000+ files) and __pycache__ into the image
+# Docker ignore — AlgoTrade
+# Prevents node_modules, __pycache__, secrets from entering image layers
 
 # Git
 .git/
 .github/
 
-# Node artefacts - exclude from ALL locations
+# Node artefacts
 node_modules/
 **/node_modules/
 algo/node_modules/
 app/frontend/dist/
 app/frontend/.vite/
 
-# Python artefacts
+# Python bytecode — explicit at every level to avoid BuildKit glob bugs
 __pycache__/
 **/__pycache__/
+algo/__pycache__/
+app/**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -28,13 +30,13 @@ env/
 .env.*
 data/
 
-# Docs
+# Docs and logs
 *.md
 *.log
 logs/
 .DS_Store
 Thumbs.db
 
-# Algo junk accidentally in repo
+# Algo junk
 algo/package.json
 algo/package-lock.json
