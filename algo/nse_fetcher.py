@@ -57,7 +57,7 @@ class NSEFetcher:
     Auto-refreshes the session when NSE returns a 403/empty response.
     """
 
-    def __init__(self, session_refresh_interval: int = 300):
+    def __init__(self, session_refresh_interval: int = 120):
         """
         Args:
             session_refresh_interval: seconds between proactive cookie refreshes (default 5 min)
@@ -74,11 +74,12 @@ class NSEFetcher:
         s = requests.Session()
         s.headers.update(_HEADERS)
         try:
-            # Step 1: hit option-chain page to get initial cookies
-            s.get(_BASE + "/option-chain", timeout=10)
-            time.sleep(0.5)
-            # Step 2: hit allIndices to validate the session
-            s.get(_BASE + _ALL_INDICES, timeout=8)
+            s.get(_BASE, timeout=8)                                      # home page
+            time.sleep(0.3)
+            s.get(_BASE + "/option-chain", timeout=8)                   # option chain page
+            time.sleep(0.3)
+            s.get(_BASE + _ALL_INDICES, timeout=8)                       # allIndices
+            time.sleep(0.3)
         except Exception as e:
             print(f"[NSEFetcher] Session init warning: {e}")
         self._session = s
