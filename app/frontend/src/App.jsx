@@ -222,9 +222,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--body)}
 .mover-ltp{font-family:var(--mono);font-size:10px;color:var(--muted)}
 .mover-chg{font-family:var(--mono);font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px}
 .chg-up{background:rgba(0,255,157,.1);color:var(--grn)}.chg-dn{background:rgba(255,61,90,.1);color:var(--red)}
-@keyframes flash-up{0%,30%{background:rgba(0,255,157,.3)}100%{background:transparent}}
-@keyframes flash-dn{0%,30%{background:rgba(255,61,90,.3)}100%{background:transparent}}
-.flash-up{animation:flash-up .6s ease-out}.flash-dn{animation:flash-dn .6s ease-out}
+@keyframes flash-up{0%{background:rgba(0,255,157,.45);transform:scale(1.02)}60%{background:rgba(0,255,157,.2)}100%{background:transparent;transform:scale(1)}}
+@keyframes flash-dn{0%{background:rgba(255,61,90,.45);transform:scale(1.02)}60%{background:rgba(255,61,90,.2)}100%{background:transparent;transform:scale(1)}}
+.flash-up{animation:flash-up 1.2s ease-out}.flash-dn{animation:flash-dn 1.2s ease-out}
 .live-dot{width:6px;height:6px;border-radius:50%;background:var(--grn);display:inline-block;animation:pulse 1s infinite;margin-right:4px}
 .login-wrap{height:100%;display:flex;align-items:center;justify-content:center;background:var(--bg);overflow-y:auto}
 .login-card{background:var(--s1);border:1px solid var(--br);border-radius:14px;padding:34px;width:min(370px,90vw)}
@@ -834,7 +834,7 @@ export default function App(){
           const d=JSON.parse(e.data);
           if(d.type==="signal"&&d.data){addSignals([d.data]);if(d.data.regime)setRegime(r=>({...r,regime:d.data.regime,vix:d.data.vix}));if((d.data.strategy||"").toUpperCase().includes("PCR")||d.data.source==="pcr_strategy"||d.data.source==="pcr_mock")addPcrHistory(d.data);return;}
           if(d.type==="equity_signals"&&d.signals?.length){setSigs(prev=>mergeSignals(prev.filter(s=>s.market!=="EQUITY"),d.signals));return;}
-          if(d.type==="indices_update"&&d.indices?.length){setIdxMap(prev=>{const next={...prev};for(const idx of d.indices){const pl=(prev[idx.label]?.ltp)||0;next[idx.label]={...idx,_flash:pl&&idx.ltp!==pl?(idx.ltp>pl?"flash-up":"flash-dn"):"",_ts:Date.now()};}return next;});return;}
+          if(d.type==="indices_update"&&d.indices?.length){setIdxMap(prev=>{const next={...prev};for(const idx of d.indices){const pl=(prev[idx.label]?.ltp)||0;const flash=pl&&idx.ltp!==pl?(idx.ltp>pl?"flash-up":"flash-dn"):"";next[idx.label]={...idx,_flash:flash,_ts:Date.now()};}return next;});setTimeout(()=>setIdxMap(prev=>{const c={...prev};for(const k of Object.keys(c))c[k]={...c[k],_flash:""};return c;}),1300);return;}
           if(d.type==="regime"){setRegime(r=>({...r,...d}));return;}
           if(d.type==="heartbeat"||d.type==="status"){
             if(d.nse_live!=null)setNseLive(!!d.nse_live);
@@ -858,7 +858,7 @@ export default function App(){
 
   useEffect(()=>{
     if(!user)return;
-    const iv=setInterval(()=>{api("/indices").then(d=>{if(d.indices?.length){setIdxMap(prev=>{const next={...prev};for(const idx of d.indices){const pl=(prev[idx.label]?.ltp)||0;next[idx.label]={...idx,_flash:pl&&idx.ltp!==pl?(idx.ltp>pl?"flash-up":"flash-dn"):"",_ts:Date.now()};}return next;});}}).catch(()=>{});},10000);
+    const iv=setInterval(()=>{api("/indices").then(d=>{if(d.indices?.length){setIdxMap(prev=>{const next={...prev};for(const idx of d.indices){const pl=(prev[idx.label]?.ltp)||0;next[idx.label]={...idx,_flash:pl&&idx.ltp!==pl?(idx.ltp>pl?"flash-up":"flash-dn"):"",_ts:Date.now()};}return next;});}}).catch(()=>{});},3000);
     return()=>clearInterval(iv);
   },[user]);
 
