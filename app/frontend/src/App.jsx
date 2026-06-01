@@ -301,14 +301,22 @@ function matchesStrategy(sig,stratLabel){if(!stratLabel)return true;return skey(
 function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction}){
   const [candles,setCandles]=useState([]);
   const [ivl,setIvl]=useState("5");
-  const [loading,setLoading]=useState(true);
+  const [loading,setLoading]=useState(false);
+  const [visible,setVisible]=useState(false);
+  const ref=useRef(null);
   useEffect(()=>{
+    const obs=new IntersectionObserver(([e])=>{if(e.isIntersecting){setVisible(true);obs.disconnect();}},{threshold:0.1});
+    if(ref.current)obs.observe(ref.current);
+    return()=>obs.disconnect();
+  },[]);
+  useEffect(()=>{
+    if(!visible)return;
     setLoading(true);
     api(`/chart/${symbol}?interval=${ivl}`)
       .then(d=>{setCandles(d.candles||[]);setLoading(false);})
       .catch(()=>setLoading(false));
-  },[symbol,ivl]);
-  if(loading)return(<div className="sig-chart-wrap"><div style={{padding:"18px",textAlign:"center",fontSize:10,color:"var(--muted)"}}>Loading chart…</div></div>);
+  },[symbol,ivl,visible]);
+  if(!visible||loading)return(<div className="sig-chart-wrap" ref={ref}><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>{loading?"Loading chart…":"─"}</div></div>);
   if(!candles.length)return(<div className="sig-chart-wrap"><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>Chart unavailable — market closed or outside hours</div></div>);
   const data=candles.map(c=>({t:c.time.slice(11,16),price:c.close,open:c.open,high:c.high,low:c.low}));
   const prices=data.map(d=>d.price);
@@ -316,7 +324,7 @@ function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction}){
   const pad=rawMax===rawMin?rawMin*0.005:0;
   const minP=(rawMin-pad)*0.998;const maxP=(rawMax+pad)*1.002;
   const dirColor=direction==="BUY"||direction==="LONG"?"var(--grn)":"var(--red)";
-  return(<div className="sig-chart-wrap">
+  return(<div className="sig-chart-wrap" ref={ref}>
     <div className="sig-chart-header">
       <span className="sig-chart-title">{symbol} • {ivl}m</span>
       <div style={{display:"flex",alignItems:"center",gap:6}}>
