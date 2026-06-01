@@ -1171,6 +1171,67 @@ async def ws_signals(ws:WebSocket):
     except WebSocketDisconnect: broadcaster.disconnect(ws)
     except Exception: broadcaster.disconnect(ws)
 
+# ── Margin management ─────────────────────────────────────────────────────
+# In-process margin store (survives the session, resets on restart)
+_margin_store: Dict[str, float] = {}
+
+def _parse_margin(raw: str) -> float:
+    """Parse margin string: 5000000 / 50L / 5CR / 5,00,000"""
+    r = raw.replace(",", "").strip().upper()
+    if r.endswith("CR") or r.endswith("C"):
+        return float(r.rstrip("CR")) * 10_000_000
+    if r.endswith("L"):
+        return float(r[:-1]) * 100_000
+    return float(r)
+
+class MarginSetupRequest(BaseModel):
+    margin: str   # accepts "5000000", "50L", "5CR", "5,00,000"
+
+@app.get("/margin/status")
+def margin_status(user=Depends(get_current_user)):
+    """Get current margin setup for the logged-in user."""
+    email = user["email"]
+    available = _margin_store.get(email, float(os.environ.get("AVAILABLE_MARGIN", "0") or "0"))
+    deployed  = 0.0  # future: wire to open positions tracker
+    lot_capacity = {
+        inst: int(available / m) for inst, m in {"NIFTY": 80000, "BANKNIFTY": 90000, "FINNIFTY": 50000}.items()
+    }
+    return {
+        "available": available,
+        "deployed":  deployed,
+        "free":      max(0.0, available - deployed),
+        "lot_capacity": lot_capacity,
+        "set": available > 0,
+        "source": "env" if not _margin_store.get(email) else "user",
+    }
+
+@app.post("/margin/setup")
+def margin_setup(req: MarginSetupRequest, user=Depends(get_current_user)):
+    """Set today's available margin. Called from dashboard margin widget."""
+    try:
+        val = _parse_margin(req.margin)
+    except (ValueError, AttributeError):
+        raise HTTPException(400, "Invalid margin format. Use: 5000000 or 50L or 5CR")
+    if val <= 0:
+        raise HTTPException(400, "Margin must be positive")
+    if val > 100_000_000:
+        raise HTTPException(400, "Margin exceeds maximum allowed (₹10 Cr)")
+
+    _margin_store[user["email"]] = val
+    # Also update env so position_sizer picks it up if running in same process
+    os.environ["AVAILABLE_MARGIN"] = str(val)
+
+    lot_capacity = {
+        inst: int(val / m) for inst, m in {"NIFTY": 80000, "BANKNIFTY": 90000, "FINNIFTY": 50000}.items()
+    }
+    logging.info(f"[Margin] {user['email']} set ₹{val:,.0f}")
+    return {
+        "ok": True,
+        "available": val,
+        "lot_capacity": lot_capacity,
+        "message": f"✓ Margin set to ₹{val:,.0f}",
+    }
+
 @app.get("/health")
 def health_check():
     return {"status":"ok","version":"3.4.0","users":len(_db["users"]),

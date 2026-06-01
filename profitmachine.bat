@@ -131,17 +131,63 @@ REM  STEP 2 -- ALGO SELECTION
 REM ================================================================
 echo.
 echo  ----------------------------------------------------------
-echo   STEP 2 of 3 : Choose Algo
+echo   STEP 2 of 4 : Choose Algo
 echo  ----------------------------------------------------------
 echo.
 echo  [1] Calendar Spread  (Calendaralgofinal.py)
 echo  [2] All 7 Strategies (multistrategy.py)
 echo  [3] Dashboard only   (no algo)
 echo.
-SET /P CHOICE=Enter 1, 2 or 3: 
+SET /P CHOICE=Enter 1, 2 or 3:
 
 REM ================================================================
-REM  STEP 3 -- DEPS CHECK (fast - skips if already installed)
+REM  STEP 3 -- MARGIN SETUP
+REM ================================================================
+echo.
+echo  ----------------------------------------------------------
+echo   STEP 3 of 4 : Available Margin for Today
+echo  ----------------------------------------------------------
+echo.
+echo  This sets your position sizing budget.
+echo  Algo will never exceed this — lots scale dynamically.
+echo  Formats accepted:  500000  /  5L  /  5,00,000
+echo.
+
+REM Try to load saved margin from last session
+SET SAVED_MARGIN=
+IF EXIST "%~dp0data\margin_today.txt" (
+    SET /P SAVED_MARGIN=<"%~dp0data\margin_today.txt"
+)
+
+IF NOT "!SAVED_MARGIN!"=="" (
+    echo  [SAVED] Last margin: Rs.!SAVED_MARGIN!
+    echo.
+    SET /P MARGIN_CONFIRM=  Use this again? [Y/N, default Y]:
+    IF /I "!MARGIN_CONFIRM!"=="N" (
+        SET SAVED_MARGIN=
+    )
+)
+
+IF "!SAVED_MARGIN!"=="" (
+    SET /P AVAILABLE_MARGIN=  Enter margin (Rs.):
+) ELSE (
+    SET AVAILABLE_MARGIN=!SAVED_MARGIN!
+)
+
+REM Save margin for next session
+IF NOT "!AVAILABLE_MARGIN!"=="" (
+    echo !AVAILABLE_MARGIN!>"%~dp0data\margin_today.txt"
+    echo  [OK] Margin set: Rs.!AVAILABLE_MARGIN!
+) ELSE (
+    SET AVAILABLE_MARGIN=500000
+    echo  [DEFAULT] No margin entered - using Rs.500,000
+)
+
+REM Set as env var so backend + algos can read it
+SET AVAILABLE_MARGIN=!AVAILABLE_MARGIN!
+
+REM ================================================================
+REM  STEP 4 -- DEPS CHECK (fast - skips if already installed)
 REM ================================================================
 echo.
 echo  ----------------------------------------------------------
@@ -187,6 +233,11 @@ IF NOT EXIST "node_modules" (
 ) ELSE (
     echo  [npm] node_modules exists - skipping
 )
+
+REM ── Clear Vite cache so latest code is always served ────────
+IF EXIST "node_modules\.vite"  rmdir /s /q "node_modules\.vite"  >nul 2>&1
+IF EXIST ".vite"               rmdir /s /q ".vite"               >nul 2>&1
+echo  [OK] Vite cache cleared - dashboard will show latest code
 cd /d "%~dp0"
 
 REM ── Dirs ──────────────────────────────────────────────────────
@@ -199,41 +250,7 @@ echo  Launching...
 echo.
 
 REM ── Backend ───────────────────────────────────────────────────
-start "AlgoTrade API" cmd /k "SET PATH=!PATH! && title AlgoTrade API && cd /d "%~dp0app\backend" && !PYTHON! main.py"
+start "AlgoTrade API" cmd /k "SET PATH=!PATH! && SET AVAILABLE_MARGIN=!AVAILABLE_MARGIN! && SET DHAN_CLIENT_ID=!DHAN_CLIENT_ID! && SET DHAN_ACCESS_TOKEN=!DHAN_ACCESS_TOKEN! && title AlgoTrade API v2.0 && cd /d "%~dp0app\backend" && !PYTHON! main.py"
 timeout /t 3 /nobreak >nul
 
-REM ── Frontend ──────────────────────────────────────────────────
-start "AlgoTrade Dashboard" cmd /k "SET PATH=!PATH! && title AlgoTrade Dashboard && cd /d "%~dp0app\frontend" && !NPM! run dev"
-timeout /t 4 /nobreak >nul
-
-REM ── Dhan Ticker ───────────────────────────────────────────────
-IF "!DHAN_MODE!"=="DHAN_WS" (
-    start "Dhan Ticker" cmd /k "SET PATH=!PATH! && SET DHAN_CLIENT_ID=!DHAN_CLIENT_ID! && SET DHAN_ACCESS_TOKEN=!DHAN_ACCESS_TOKEN! && title Dhan WebSocket Ticker && cd /d "%~dp0" && !PYTHON! -c "from algo.dhan_ticker import start_dhan_ticker; import time; start_dhan_ticker([260105,256265]); print('[Dhan] Running'); [time.sleep(60) for _ in iter(int,1)]""
-)
-
-REM ── Algo ──────────────────────────────────────────────────────
-IF "%CHOICE%"=="1" (
-    start "Calendar Algo" cmd /k "SET PATH=!PATH! && title Calendar Spread Algo && cd /d "%~dp0" && !PYTHON! algo\Calendaralgofinal.py"
-)
-IF "%CHOICE%"=="2" (
-    start "Multi-Strategy" cmd /k "SET PATH=!PATH! && title Multi-Strategy Algo && cd /d "%~dp0" && !PYTHON! algo\multistrategy.py"
-)
-
-timeout /t 2 /nobreak >nul
-start "" "http://localhost:5173"
-
-echo.
-echo  ==========================================================
-echo   DONE - Platform is running
-echo.
-echo   Dashboard : http://localhost:5173
-echo   API       : http://localhost:8000/docs
-echo   Login     : demo@algotrade.in / demo123
-IF "!DHAN_MODE!"=="DHAN_WS" (
-echo   Dhan WS   : ENABLED
-) ELSE (
-echo   Dhan WS   : OFF  (add token to .env to enable)
-)
-echo  ==========================================================
-echo.
-pause
+REM ── Frontend ─────�

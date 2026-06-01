@@ -625,6 +625,158 @@ function TraderLoggerTab(){
 
 function AnalyticsTab(){const [pnl,setPnl]=useState(null);useEffect(()=>{api("/analytics/pnl").then(setPnl).catch(()=>{});},[]);const byS=pnl?.by_strategy||{};const chart=Object.entries(byS).map(([k,v])=>({name:k.replace(/^[SE]\d\s/,"").slice(0,12),pnl:Math.round(v.total_pnl||0)}));return(<div><div className="stats-grid">{[{l:"Total P&L",v:fmtINR(pnl?.total_pnl||0),c:(pnl?.total_pnl||0)>=0?"var(--grn)":"var(--red)"},{l:"Total Trades",v:pnl?.total_trades||0,c:"var(--acc)"},{l:"Winners",v:pnl?.winning_trades||0,c:"var(--grn)"},{l:"Win Rate",v:pnl?.total_trades?Math.round((pnl.winning_trades/pnl.total_trades)*100)+"%":"—",c:"var(--yel)"}].map((s,i)=>(<div key={i} className="stat-card"><div className="stat-lbl">{s.l}</div><div className="stat-val" style={{color:s.c}}>{s.v}</div></div>))}</div>{chart.length>0?(<div className="card" style={{marginBottom:14}}><div className="card-lbl">P&amp;L by Strategy</div><ResponsiveContainer width="100%" height={190}><BarChart data={chart} margin={{top:6,right:14,bottom:6,left:0}}><CartesianGrid strokeDasharray="3 3" stroke="var(--br)"/><XAxis dataKey="name" tick={{fontSize:8,fill:"var(--muted)"}}/><YAxis tick={{fontSize:8,fill:"var(--muted)"}} tickFormatter={v=>`₹${(v/1000).toFixed(0)}k`}/><Tooltip contentStyle={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:7,fontSize:10}} formatter={v=>[`₹${Number(v).toLocaleString("en-IN")}`,"P&L"]}/><Bar dataKey="pnl" fill="var(--acc)" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div>):(<div className="empty"><div className="empty-ico">📈</div><div className="empty-t">No closed trades yet</div></div>)}</div>);}
 
+function MarginBadge({onSetup}){
+  const [status,setStatus]=useState(null);
+  useEffect(()=>{
+    api("/margin/status").then(setStatus).catch(()=>{});
+    const t=setInterval(()=>api("/margin/status").then(setStatus).catch(()=>{}),30000);
+    return()=>clearInterval(t);
+  },[]);
+  const available=status?.available||0;
+  if(!status)return null;
+  if(available<=0){
+    return(<div className="badge" style={{cursor:"pointer",color:"var(--yel)",borderColor:"rgba(245,197,24,.3)",background:"rgba(245,197,24,.06)"}} onClick={onSetup}>
+      ⚠ Set Margin
+    </div>);
+  }
+  const freeL=(status.free/100000).toFixed(1);
+  const totalL=(available/100000).toFixed(1);
+  return(<div className="badge" style={{cursor:"pointer",color:"var(--grn)",borderColor:"rgba(0,255,157,.2)",background:"rgba(0,255,157,.04)"}} onClick={onSetup} title="Click to update margin">
+    ₹{freeL}L free / {totalL}L
+  </div>);
+}
+
+function MarginTab(){
+  const [status,setStatus]=useState(null);
+  const [input,setInput]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [msg,setMsg]=useState("");
+
+  const load=()=>api("/margin/status").then(setStatus).catch(()=>{});
+  useEffect(()=>{load();},[]);
+
+  const save=async()=>{
+    if(!input.trim())return;
+    setLoading(true);setMsg("");
+    try{
+      const r=await api("/margin/setup",{method:"POST",body:JSON.stringify({margin:input.trim()})});
+      setMsg(r.message||"✓ Saved");
+      setInput("");
+      load();
+    }catch(e){setMsg("✗ "+e.message);}
+    finally{setLoading(false);}
+  };
+
+  const MARGINS={NIFTY:80000,BANKNIFTY:90000,FINNIFTY:50000};
+  const presets=[
+    {label:"5L",  value:"500000"},
+    {label:"10L", value:"1000000"},
+    {label:"25L", value:"2500000"},
+    {label:"50L", value:"5000000"},
+  ];
+
+  const available=status?.available||0;
+  const free=status?.free||0;
+  const lotCap=status?.lot_capacity||{};
+  const pct=available>0?Math.round((1-free/available)*100):0;
+
+  return(<div>
+    {/* Header card */}
+    <div style={{background:"var(--s1)",border:"1px solid rgba(0,212,255,.2)",borderRadius:12,padding:"16px 18px",marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+        <span style={{fontSize:20}}>₹</span>
+        <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--acc)"}}>MARGIN SETUP</div>
+        <span style={{fontSize:9,fontFamily:"var(--mono)",padding:"2px 7px",borderRadius:10,background:available>0?"rgba(0,255,157,.1)":"rgba(255,61,90,.1)",color:available>0?"var(--grn)":"var(--red)",border:`1px solid ${available>0?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`}}>
+          {available>0?"SET":"NOT SET"}
+        </span>
+      </div>
+      {available>0?(<>
+        {/* Margin bars */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
+          {[
+            {lbl:"AVAILABLE",val:`₹${(available/100000).toFixed(1)}L`,col:"var(--acc)"},
+            {lbl:"DEPLOYED", val:`₹${((available-free)/100000).toFixed(1)}L`,col:"var(--yel)"},
+            {lbl:"FREE",     val:`₹${(free/100000).toFixed(1)}L`,col:"var(--grn)"},
+          ].map((s,i)=>(<div key={i} style={{background:"var(--s2)",borderRadius:8,padding:"9px 12px",textAlign:"center"}}>
+            <div style={{fontSize:8,color:"var(--muted)",letterSpacing:"1.5px",marginBottom:4}}>{s.lbl}</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:18,fontWeight:700,color:s.col}}>{s.val}</div>
+          </div>))}
+        </div>
+        {/* Utilisation bar */}
+        <div style={{marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:8,color:"var(--muted)",marginBottom:4}}>
+            <span>UTILISATION</span><span style={{fontFamily:"var(--mono)",color:"var(--yel)"}}>{pct}%</span>
+          </div>
+          <div style={{height:6,background:"var(--br2)",borderRadius:3,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${pct}%`,background:pct>80?"var(--red)":pct>50?"var(--yel)":"var(--grn)",borderRadius:3,transition:"width .4s"}}/>
+          </div>
+        </div>
+        {/* Lot capacity */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+          {Object.entries(lotCap).map(([inst,lots])=>(
+            <div key={inst} style={{background:"var(--s2)",borderRadius:7,padding:"8px 10px",textAlign:"center"}}>
+              <div style={{fontSize:8,color:"var(--muted)",marginBottom:3,letterSpacing:"1px"}}>{inst}</div>
+              <div style={{fontFamily:"var(--mono)",fontSize:20,fontWeight:700,color:"var(--acc)"}}>{lots}</div>
+              <div style={{fontSize:8,color:"var(--dim)"}}>max lots</div>
+              <div style={{fontSize:7,color:"var(--dim)",fontFamily:"var(--mono)"}}>₹{(MARGINS[inst]/1000).toFixed(0)}k/lot</div>
+            </div>
+          ))}
+        </div>
+      </>):(
+        <div style={{textAlign:"center",padding:"20px 0",color:"var(--muted)",fontSize:11}}>
+          <div style={{fontSize:28,marginBottom:8}}>₹</div>
+          <div>Set your trading margin to enable dynamic lot sizing</div>
+        </div>
+      )}
+    </div>
+
+    {/* Input */}
+    <div style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:10,padding:"14px 16px",marginBottom:12}}>
+      <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--acc)",fontWeight:700,marginBottom:10}}>
+        {available>0?"UPDATE MARGIN":"SET TODAY'S MARGIN"}
+      </div>
+      {msg&&<div style={{fontSize:11,padding:"6px 9px",borderRadius:6,marginBottom:10,
+        background:msg.startsWith("✓")?"rgba(0,255,157,.08)":"rgba(255,61,90,.08)",
+        color:msg.startsWith("✓")?"var(--grn)":"var(--red)",
+        border:`1px solid ${msg.startsWith("✓")?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`}}>{msg}</div>}
+      <div style={{marginBottom:10}}>
+        <label style={{fontSize:9,color:"var(--muted)",display:"block",marginBottom:5,letterSpacing:".5px"}}>AVAILABLE MARGIN</label>
+        <input
+          className="form-inp"
+          placeholder="e.g. 5000000 or 50L or 5,00,000"
+          value={input}
+          onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&save()}
+          style={{fontSize:14,fontFamily:"var(--mono)"}}
+        />
+        <div style={{fontSize:9,color:"var(--dim)",marginTop:4}}>Accepted formats: 5000000 / 50L / 5,00,000</div>
+      </div>
+      {/* Quick presets */}
+      <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+        {presets.map(p=>(<button key={p.label} className="btn btn-ghost btn-sm" style={{fontFamily:"var(--mono)",fontSize:10}} onClick={()=>setInput(p.value)}>{p.label}</button>))}
+      </div>
+      <button className="btn btn-primary" style={{width:"100%"}} onClick={save} disabled={loading||!input.trim()}>
+        {loading?"Saving…":"Set Margin"}
+      </button>
+    </div>
+
+    {/* How sizing works */}
+    <div style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:10,padding:"14px 16px"}}>
+      <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",fontWeight:700,marginBottom:10,letterSpacing:"1px"}}>HOW DYNAMIC SIZING WORKS</div>
+      {[
+        ["Signal Score",   "Higher score → more lots. Score 85+ = full size, 45 = 10% size"],
+        ["VIX Level",      "VIX <13 = full size. VIX >22 = 15% size (extreme caution)"],
+        ["Market Regime",  "Sideways/low-vol = full. Extreme panic = 5% (near-zero)"],
+        ["Win/Loss Streak","3 losses in a row = half size until a win. 3 wins = 10% boost"],
+        ["Strategy Risk",  "Calendar/Iron Condor (low risk) get higher sizing than naked options"],
+      ].map(([k,v])=>(<div key={k} style={{display:"flex",gap:10,marginBottom:7,fontSize:10}}>
+        <div style={{fontFamily:"var(--mono)",color:"var(--acc)",minWidth:120,fontSize:9,flexShrink:0,paddingTop:2}}>{k}</div>
+        <div style={{color:"var(--muted)",lineHeight:1.5}}>{v}</div>
+      </div>))}
+    </div>
+  </div>);
+}
+
 function SubscriptionTab({user}){
   const [plans,setPlans]=useState([]);const [status,setStatus]=useState(null);
   const [billing,setBilling]=useState("monthly");const [loading,setLoading]=useState("");const [msg,setMsg]=useState("");
@@ -903,7 +1055,7 @@ export default function App(){
   const toggleDropdown=m=>{setOpenMkt(prev=>prev===m?null:m);};
   const selectStrategy=s=>{setStrat(prev=>prev===s?null:s);setTab("signals");};
   const TABS=[{id:"signals",lbl:`Signals (${signals.length})`},{id:"tradelog",lbl:"Trade Log"},{id:"paper",lbl:"Paper"},{id:"analytics",lbl:"Analytics"},{id:"why",lbl:"💡 Why It Works"},{id:"subscription",lbl:"Plans"}];
-  const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"tradelog",ico:"📝",lbl:"Log"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"why",ico:"💡",lbl:"Why"},{id:"subscription",ico:"★",lbl:"Plans"}];
+  const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"tradelog",ico:"📝",lbl:"Log"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"margin",ico:"₹",lbl:"Margin"},{id:"subscription",ico:"★",lbl:"Plans"}];
 
   return(<><style>{CSS}</style>
     {logModal&&<LogTradeModal sig={logModal} onClose={()=>setLogModal(null)} onLogged={()=>{setLogModal(null);setTab("tradelog");}}/>}
@@ -912,7 +1064,7 @@ export default function App(){
         <div className="sb-logo"><div className="logo-t">ALGOTRADE</div><div className="logo-s">NSE SIGNAL PLATFORM v1.0.0</div></div>
         <nav className="sb-nav">
           <div className="nav-sect">Navigate</div>
-          {[{id:"signals",ico:"◈",lbl:"Live Signals"},{id:"tradelog",ico:"📝",lbl:"Trade Logger"},{id:"paper",ico:"📄",lbl:"Paper Trade"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"why",ico:"💡",lbl:"Why It Works"},{id:"subscription",ico:"★",lbl:"Subscription"}].map(n=>(
+          {[{id:"signals",ico:"◈",lbl:"Live Signals"},{id:"tradelog",ico:"📝",lbl:"Trade Logger"},{id:"paper",ico:"📄",lbl:"Paper Trade"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"margin",ico:"₹",lbl:"Margin Setup"},{id:"why",ico:"💡",lbl:"Why It Works"},{id:"subscription",ico:"★",lbl:"Subscription"}].map(n=>(
             <div key={n.id} className={`nav-it ${tab===n.id?"act":""}`} onClick={()=>setTab(n.id)}><span className="nav-ico">{n.ico}</span>{n.lbl}</div>
           ))}
           <div className="nav-sect">Markets</div>
@@ -936,6 +1088,7 @@ export default function App(){
           <div className="topbar-right">
             {regime?.vix!=null&&<div className="badge" style={{color:rCol}}>VIX {regime.vix}</div>}
             {pcrCount>0&&<div className="badge" style={{color:"#22c55e",borderColor:"rgba(34,197,94,.2)"}}>PCR●{pcrCount}</div>}
+            <MarginBadge onSetup={()=>setTab("margin")}/>
             <div className="badge" style={{display:"flex",alignItems:"center",gap:4,color:wsStatus==="live"?"var(--grn)":wsStatus==="connecting"?"var(--yel)":"var(--red)"}}>{wsStatus==="live"?<><span style={{width:5,height:5,borderRadius:"50%",background:"var(--grn)",display:"inline-block",animation:"pulse 1s infinite"}}/>LIVE</>:wsStatus==="connecting"?"◌ CONN":"⚠ RECONN"}</div>
             <div className="badge" style={{color:"var(--muted)"}}><span className="live-dot"/>{IST}<span style={{color:"var(--acc)",fontWeight:700}}>.{IST_MS}</span></div>
           </div>
@@ -949,6 +1102,7 @@ export default function App(){
           {tab==="tradelog"&&<TraderLoggerTab/>}
           {tab==="analytics"&&<AnalyticsTab/>}
           {tab==="paper"&&<PaperTab/>}
+          {tab==="margin"&&<MarginTab/>}
           {tab==="why"&&<StrategyTrustPanel/>}
           {tab==="subscription"&&<SubscriptionTab user={user}/>}
         </div>
@@ -969,7 +1123,4 @@ function Login({onLogin}){
     {err&&<div className="err-box">{err}</div>}
     <label className="l-lbl">Email</label><input className="l-inp" value={email} onChange={e=>setEmail(e.target.value)} type="email"/>
     <label className="l-lbl">Password</label><input className="l-inp" value={pass} onChange={e=>setPass(e.target.value)} type="password" onKeyDown={e=>e.key==="Enter"&&go()}/>
-    <button className="l-btn" onClick={go} disabled={loading}>{loading?"Signing in…":"Sign In"}</button>
-    <div className="l-demo">demo@algotrade.in / demo123</div>
-  </div></div>);
-}
+    <button className="l-btn" onClick={go} disabled={loading}>{loading?"Signing in…":"Sign In"

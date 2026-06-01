@@ -102,30 +102,43 @@ class PositionSizer:
         self._ask_margin()
 
     # ── Startup margin input ─────────────────────────────────────
+    def _parse_margin_str(self, raw: str) -> float:
+        raw = raw.replace(",", "").strip().upper()
+        if raw.endswith("CR") or raw.endswith("C"):
+            return float(raw.rstrip("CR")) * 10_000_000
+        if raw.endswith("L"):
+            return float(raw[:-1]) * 100_000
+        return float(raw)
+
     def _ask_margin(self):
+        # ── 1. Read from env var (set by profitmachine.bat) ──────────
+        env_margin = os.environ.get("AVAILABLE_MARGIN", "").strip()
+        if env_margin:
+            try:
+                val = self._parse_margin_str(env_margin)
+                if val > 0:
+                    self.available_margin = val
+                    print(f"\n  [PositionSizer] Margin loaded from env: ₹{val:,.0f}")
+                    self._print_margin_summary()
+                    return
+            except ValueError:
+                pass  # fall through to interactive prompt
+
+        # ── 2. Interactive prompt (terminal / standalone run) ─────────
         print("\n" + "=" * 60)
         print("  POSITION SIZER — Margin Setup")
         print("=" * 60)
         print("  Enter the margin available for trading today.")
         print("  This determines maximum lot sizes dynamically.")
-        print("  You can update this any time during the session.\n")
+        print("  Formats: 5000000  /  50L  /  5,00,000\n")
 
         while True:
             try:
                 raw = input("  Available Margin today (₹): ").strip()
-                # Accept formats: 5000000 / 50L / 50l / 50,00,000
-                raw = raw.replace(",", "").upper()
-                if raw.endswith("L"):
-                    val = float(raw[:-1]) * 100_000
-                elif raw.endswith("CR") or raw.endswith("C"):
-                    val = float(raw.rstrip("CR")) * 10_000_000
-                else:
-                    val = float(raw)
-
+                val = self._parse_margin_str(raw)
                 if val <= 0:
                     print("  Please enter a positive amount.")
                     continue
-
                 self.available_margin = val
                 self._print_margin_summary()
                 break
@@ -383,4 +396,4 @@ if __name__ == "__main__":
         sizer.explain_lots(strat, score, vix, regime, inst, lots)
         sizer.deploy(lots, inst)
 
-    sizer.show_status()
+    sizer
