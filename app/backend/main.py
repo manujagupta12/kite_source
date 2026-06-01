@@ -287,7 +287,7 @@ def _mock_pcr_signal(instrument=None):
 
 # ── FIXED: NSE live signal (was _xls_signal, used wrong far_bid key) ───────
 def _nse_signal():
-    """Generate live calendar signal from NSE Direct API via data_provider."""
+    # Generate live calendar signal from NSE Direct API via data_provider.
     if not _NSE_OK or _loader is None:
         return None
     try:
@@ -483,7 +483,7 @@ class Broadcaster:
 broadcaster=Broadcaster()
 
 async def indices_loop():
-    """Indices refresh every 5s — NSE allIndices API."""    global _latest_indices_map
+    # Indices refresh every 5s — NSE allIndices API.    global _latest_indices_map
     while True:
         try:
             indices = await asyncio.get_event_loop().run_in_executor(None, _fetch_live_indices)
@@ -680,7 +680,7 @@ def _fetch_nse_intraday(symbol: str) -> list:
         return []
 
 def _resample_candles(candles: list, interval_min: int) -> list:
-    """Resample 1-min candles into N-min candles."""
+    # Resample 1-min candles into N-min candles.
     if interval_min <= 1 or not candles:
         return candles
     resampled = []
@@ -709,7 +709,7 @@ def _resample_candles(candles: list, interval_min: int) -> list:
     return resampled
 
 def _fallback_candles(symbol: str, interval: int, n: int = 60) -> list:
-    """Realistic fallback using last known LTP as anchor (not random walk from base)."""
+    # Realistic fallback using last known LTP as anchor (not random walk from base).
     BASES = {"NIFTY":24500,"BANKNIFTY":53000,"FINNIFTY":23000,"VIX":14.5}
     # Use last known live price as anchor if available
     live = _latest_indices_map.get(symbol, {})
