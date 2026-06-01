@@ -397,17 +397,3 @@ if __name__ == "__main__":
         sizer.deploy(lots, inst)
 
     sizer.show_status()
-),
-        ("S3 SHORT STRADDLE",60,20.1, "R6_HIGH_VOL",      "NIFTY"),
-        ("S4 MOMENTUM",     55, 14.0, "R4_TRENDING_BULL", "BANKNIFTY"),
-        ("S1 CALENDAR",     42, 21.5, "R6_HIGH_VOL",      "NIFTY"),   # weak + high vix
-        ("S6 EXPIRY 0DTE",  81, 15.0, "R7_EXPIRY",        "NIFTY"),
-    ]
-
-    for strat, score, vix, regime, inst in scenarios:
-        lots = sizer.get_lots(strat, score, vix, regime, inst)
-        print(f"  {strat:<25} Score:{score}  VIX:{vix}  -> {lots} lot{'s' if lots!=1 else ''}")
-        sizer.explain_lots(strat, score, vix, regime, inst, lots)
-        sizer.deploy(lots, inst)
-
-    sizer.show_status()

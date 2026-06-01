@@ -657,6 +657,19 @@ async def indices_loop():
                 "message": "NSE data fetch pending", "timestamp": _ist_now().isoformat()})
         await asyncio.sleep(3 if _is_market_open() else 15)
 
+
+# ── Telegram bot (lazy init) ─────────────────────────────────────────────
+try:
+    from telegram_bot import get_bot as _get_tg_bot
+    _TG_OK = True
+except ImportError:
+    _TG_OK = False
+
+def _tg_send(signal: dict) -> None:
+    if not _TG_OK: return
+    try: _get_tg_bot().send_signal(signal)
+    except Exception as e: logging.debug(f"[Telegram] {e}")
+
 async def signal_loop():
     """
     Live signal engine.
