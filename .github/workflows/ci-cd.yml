@@ -12,8 +12,7 @@ env:
   IMAGE_BACKEND: ghcr.io/${{ github.repository_owner }}/algotrade-backend
   IMAGE_FRONTEND: ghcr.io/${{ github.repository_owner }}/algotrade-frontend
   PYTHON_VERSION: '3.11'
-  NODE_VERSION: '20'
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  NODE_VERSION: '22'
 
 jobs:
 
@@ -42,7 +41,12 @@ jobs:
 
       - name: Lint backend (fatal errors only)
         run: |
-          flake8 app/backend/main.py algo/pcr_strategy.py \
+          flake8 \
+            app/backend/main.py \
+            algo/pcr_strategy.py \
+            algo/broker.py \
+            algo/razorpay_handler.py \
+            algo/telegram_bot.py \
             --select=E9,F821,F823 \
             --max-line-length=200 \
             --count
@@ -51,7 +55,12 @@ jobs:
         run: |
           python -m py_compile app/backend/main.py
           python -m py_compile algo/pcr_strategy.py
-          echo "Python syntax OK"
+          python -m py_compile algo/broker.py
+          python -m py_compile algo/razorpay_handler.py
+          python -m py_compile algo/telegram_bot.py
+          python -m py_compile algo/position_sizer.py
+          python -m py_compile algo/nse_connector.py
+          echo "Python syntax OK — all algo files clean"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -73,8 +82,8 @@ jobs:
         working-directory: app/frontend
         run: npm run build
         env:
-          VITE_API_URL: http://localhost:8000
-          VITE_WS_URL: ws://localhost:8000
+          VITE_API_URL: ''
+          VITE_WS_URL: ''
 
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
@@ -168,8 +177,8 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
           build-args: |
-            VITE_API_URL=http://localhost:8000
-            VITE_WS_URL=ws://localhost:8000
+            VITE_API_URL=
+            VITE_WS_URL=
 
       - name: Summary
         run: |
@@ -207,7 +216,8 @@ jobs:
             Dockerfile.backend \
             Dockerfile.frontend \
             nginx.conf \
-            app/backend/requirements.txt
+            app/backend/requirements.txt \
+            .env.example
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
@@ -218,8 +228,10 @@ jobs:
 
             ### Quick Start
             ```bash
+            git clone https://github.com/manujagupta12/kite_source.git algotrade && cd algotrade
+            cp .env.example .env   # fill in your credentials
             docker compose up --build
-            # http://localhost -> demo@algotrade.in / demo123
+            # http://localhost → demo@algotrade.in / demo123
             ```
           files: algotrade-${{ github.ref_name }}.tar.gz
           draft: false
