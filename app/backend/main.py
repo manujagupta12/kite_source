@@ -26,13 +26,16 @@ try:
 except ImportError:
     _BCRYPT_OK = False
 
-# _ALGO_DIR resolves correctly in both local dev and Docker:
-#   Local:  app/backend/main.py -> .parent.parent.parent / "algo" = project_root/algo
-#   Docker: /app/main.py        -> .parent / "algo" = /app/algo   (Docker COPY puts it there)
-_ALGO_DIR = Path(__file__).parent.parent.parent / "algo"
-if not _ALGO_DIR.exists():
-    _ALGO_DIR = Path(__file__).parent / "algo"   # Docker path fallback
-sys.path.insert(0, str(_ALGO_DIR))
+# sys.path must contain the PARENT of algo/ so "from algo.x import" works.
+#   Local dev : app/backend/main.py -> .parent.parent.parent = kite_source/
+#   Docker    : /app/main.py        -> .parent               = /app/
+#               (Dockerfile does COPY algo/ ./algo/ and COPY app/backend/ ./)
+_ALGO_PARENT = Path(__file__).parent.parent.parent   # local: kite_source/
+if not (_ALGO_PARENT / "algo").exists():
+    _ALGO_PARENT = Path(__file__).parent             # Docker: /app/
+_ALGO_DIR = _ALGO_PARENT / "algo"
+sys.path.insert(0, str(_ALGO_PARENT))               # enables: from algo.x import ...
+sys.path.insert(1, str(_ALGO_DIR))                  # enables: import x  (flat, for algo scripts)
 
 # ── Data provider — NSE Direct API (replaces multitrade_loader / XLS) ──────
 try:
