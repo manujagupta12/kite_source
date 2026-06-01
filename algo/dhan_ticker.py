@@ -114,15 +114,12 @@ def start_dhan_ticker(instrument_tokens: list[int]) -> bool:
         global _ticker_running
         try:
             from dhanhq import DhanContext
-            # DhanContext is the correct object for DhanFeed v2
+            from dhanhq.marketfeed import MarketFeed
+
             dhan_context = DhanContext(client_id, access_token)
 
-            # Subscription: (exchange_segment, security_id, feed_type)
-            # NSE_FNO=2, Full=21 are class attrs on DhanFeed in dhanhq>=2.0
-            NSE_FNO = getattr(marketfeed, 'NSE_FNO', None) or getattr(marketfeed.DhanFeed, 'NSE_FNO', 2)
-            FULL    = getattr(marketfeed, 'Full',    None) or getattr(marketfeed.DhanFeed, 'Full',    21)
             subscriptions = [
-                (NSE_FNO, str(token), FULL)
+                (MarketFeed.NSE_FNO, str(token), MarketFeed.Full)
                 for token in instrument_tokens
             ]
 
@@ -133,7 +130,7 @@ def start_dhan_ticker(instrument_tokens: list[int]) -> bool:
                 except Exception:
                     pass
 
-            feed = marketfeed.DhanFeed(
+            feed = MarketFeed(
                 dhan_context,
                 subscriptions,
                 version="v2",
