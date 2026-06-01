@@ -406,29 +406,46 @@ def _nse_equity_quote(symbol):
 _latest_indices_map: Dict[str,dict]={}
 IDX_ORDER=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP","IT"]
 
-def _fetch_live_indices():
-    _nse_refresh(); result=[]
+def _nsefetch(url: str) -> dict:
+    # Use nsepython which handles NSE cookies via curl/requests properly
     try:
-        r=_nse_sess.get("https://www.nseindia.com/api/allIndices",timeout=3)
-        name_map={"NIFTY 50":"NIFTY","NIFTY BANK":"BANKNIFTY","NIFTY FIN SERVICE":"FINNIFTY",
-                  "INDIA VIX":"VIX","NIFTY MIDCAP 100":"MIDCAP","NIFTY IT":"IT"}
-        fetched={}
-        for item in r.json().get("data",[]):
-            nm=item.get("index","")
+        from nsepython import nsefetch
+        return nsefetch(url)
+    except Exception:
+        pass
+    # Fallback: raw requests session
+    try:
+        _nse_refresh()
+        r = _nse_sess.get(url, timeout=4)
+        return r.json()
+    except Exception:
+        return {}
+
+def _fetch_live_indices():
+    BASES = {"NIFTY":24500,"BANKNIFTY":53000,"FINNIFTY":23000,"VIX":14.5,"MIDCAP":52000,"IT":37000}
+    name_map = {"NIFTY 50":"NIFTY","NIFTY BANK":"BANKNIFTY","NIFTY FIN SERVICE":"FINNIFTY",
+                "INDIA VIX":"VIX","NIFTY MIDCAP 100":"MIDCAP","NIFTY IT":"IT"}
+    result = []
+    try:
+        data = _nsefetch("https://www.nseindia.com/api/allIndices")
+        fetched = {}
+        for item in data.get("data", []):
+            nm = item.get("index", "")
             if nm in name_map:
-                lbl=name_map[nm]; ltp=float(item.get("last") or 0)
-                fetched[lbl]={"label":lbl,"ltp":round(ltp,2),
-                              "change_pct":round(float(item.get("percentChange") or 0),2),
-                              "change":float(item.get("change") or 0),
-                              "high":float(item.get("high") or ltp),
-                              "low":float(item.get("low") or ltp),"_ts":int(time.time())}
-        if fetched: result=[fetched[l] for l in IDX_ORDER if l in fetched]
-    except: pass
+                lbl = name_map[nm]; ltp = float(item.get("last") or 0)
+                fetched[lbl] = {"label":lbl,"ltp":round(ltp,2),
+                                "change_pct":round(float(item.get("percentChange") or 0),2),
+                                "change":float(item.get("change") or 0),
+                                "high":float(item.get("high") or ltp),
+                                "low":float(item.get("low") or ltp),"_ts":int(time.time())}
+        if fetched:
+            result = [fetched[l] for l in IDX_ORDER if l in fetched]
+    except Exception:
+        pass
     if not result:
-        BASES={"NIFTY":24500,"BANKNIFTY":53000,"FINNIFTY":23000,"VIX":14.5,"MIDCAP":52000,"IT":37000}
         for lbl in IDX_ORDER:
-            prev=_latest_indices_map.get(lbl); base=prev["ltp"] if prev else BASES[lbl]
-            ltp=round(base+base*random.uniform(-0.003,0.003),2)
+            prev = _latest_indices_map.get(lbl); base = prev["ltp"] if prev else BASES[lbl]
+            ltp = round(base + base*random.uniform(-0.003, 0.003), 2)
             result.append({"label":lbl,"ltp":ltp,
                            "change_pct":round((ltp-BASES[lbl])/BASES[lbl]*100,2),
                            "change":round(ltp-BASES[lbl],2),
@@ -646,15 +663,13 @@ def _fetch_nse_intraday(symbol: str) -> list:
     cached = _chart_cache.get(symbol)
     if cached and time.time() - cached["ts"] < _CHART_TTL:
         return cached["candles"]
-    _nse_refresh()
     try:
         idx_name = _NSE_INDEX_MAP.get(symbol)
         if idx_name:
             url = f"https://www.nseindia.com/api/chart-databyindex?index={idx_name.replace(' ', '%20')}&indices=true"
         else:
             url = f"https://www.nseindia.com/api/chart-databyindex?index={symbol}EQN"
-        r = _nse_sess.get(url, timeout=4)
-        raw = r.json()
+        raw = _nsefetch(url)
         # NSE returns {grapthData: [[epoch_ms, price], ...], closePrice: N}
         data = raw.get("grapthData") or raw.get("graphData") or []
         if not data:
@@ -962,10 +977,8 @@ def _fetch_movers() -> dict:
     _nse_refresh()
     try:
         # NSE provides pre-computed gainers/losers — no per-stock calls needed
-        r = _nse_sess.get(
-            "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O",
-            timeout=4)
-        data = r.json().get("data", [])
+        raw = _nsefetch("https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O")
+        data = raw.get("data", [])
         stocks = []
         for item in data:
             sym = item.get("symbol","")
