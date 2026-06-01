@@ -15,7 +15,7 @@ services:
   - type: web
     name: algotrade-backend
     runtime: python
-    region: singapore          # closest to India
+    region:           # closest to India
     plan: free
     rootDir: .
     buildCommand: pip install -r app/backend/requirements.txt
