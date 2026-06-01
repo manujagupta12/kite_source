@@ -309,11 +309,12 @@ function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction}){
       .catch(()=>setLoading(false));
   },[symbol,ivl]);
   if(loading)return(<div className="sig-chart-wrap"><div style={{padding:"18px",textAlign:"center",fontSize:10,color:"var(--muted)"}}>Loading chart…</div></div>);
-  if(!candles.length)return null;
+  if(!candles.length)return(<div className="sig-chart-wrap"><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>Chart unavailable — market closed or outside hours</div></div>);
   const data=candles.map(c=>({t:c.time.slice(11,16),price:c.close,open:c.open,high:c.high,low:c.low}));
   const prices=data.map(d=>d.price);
-  const minP=Math.min(...prices)*0.998;
-  const maxP=Math.max(...prices)*1.002;
+  const rawMin=Math.min(...prices);const rawMax=Math.max(...prices);
+  const pad=rawMax===rawMin?rawMin*0.005:0;
+  const minP=(rawMin-pad)*0.998;const maxP=(rawMax+pad)*1.002;
   const dirColor=direction==="BUY"||direction==="LONG"?"var(--grn)":"var(--red)";
   return(<div className="sig-chart-wrap">
     <div className="sig-chart-header">
@@ -485,7 +486,7 @@ function SigCard({sig,pcrHistory,onLogTrade}){
         <div className="meta-box"><div className="meta-k">SL pts</div><div className="meta-v" style={{color:"var(--red)"}}>{sig.sl_pts||"—"}</div></div>
         <div className="meta-box"><div className="meta-k">VIX</div><div className="meta-v">{sig.vix||"—"}</div></div>
       </div>
-      {sig.reason&&<div className="sig-reason">{sig.reason}</div>}
+      <SignalMiniChart symbol={chartSymbol} entryPrice={entryPrice} targetPrice={targetPrice} slPrice={slPrice} direction={sig.direction}/>{sig.reason&&<div className="sig-reason">{sig.reason}</div>}
       <div className="sig-foot"><div className="sig-src">📡 {sig.source||"NSE"}</div><span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log Trade</span></div>
     </div>);
   }
@@ -517,7 +518,7 @@ function SigCard({sig,pcrHistory,onLogTrade}){
       <div className="meta-box"><div className="meta-k">Lots</div><div className="meta-v">{sig.lots_suggested||"—"}</div></div>
       <div className="meta-box"><div className="meta-k">VIX</div><div className="meta-v">{sig.vix||"—"}</div></div>
     </div>
-    {sig.reason&&<div className="sig-reason">{sig.reason}</div>}
+    <SignalMiniChart symbol={chartSymbol} entryPrice={entryPrice} targetPrice={targetPrice} slPrice={slPrice} direction={sig.direction}/>{sig.reason&&<div className="sig-reason">{sig.reason}</div>}
     <div className="sig-foot"><div className="sig-src">📡 {sig.source||"Algo"}</div><span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log Trade</span></div>
   </div>);
 }
