@@ -48,6 +48,8 @@ class NseOiFetcher:
         self._sess = requests.Session()
         self._sess.headers.update(self.HEADERS)
         self._last_refresh = 0.0
+        self._fail_count = 0
+        self._backoff_until = 0.0
         self._prime()
 
     def _prime(self):
@@ -63,10 +65,11 @@ class NseOiFetcher:
             self._prime()
 
     def fetch_oi_pcr(self, symbol: str = "NIFTY") -> Optional[Dict[str, Any]]:
-        """
-        Fetch OI-based PCR for given symbol.
-        Returns dict with pcr_oi, pcr_volume, total_put_oi, total_call_oi, spot, timestamp.
-        """
+        """Fetch OI-based PCR with circuit breaker to prevent log spam."""        # Circuit breaker
+        if self._fail_count >= 3:
+            if time.time() < self._backoff_until:
+                return None
+            self._fail_count = 0
         self._ensure_session()
         url = f"{self.BASE}/api/option-chain-indices?symbol={symbol}"
         try:
@@ -107,7 +110,11 @@ class NseOiFetcher:
                 "source":        "nse_live",
             }
         except Exception as e:
-            log.error(f"[NSE OI] {symbol}: {e}")
+            self._fail_count += 1
+            if self._fail_count == 1:
+                log.warning(f"[PCR] NSE OI unavailable for {symbol} — will retry in 5 min")
+            if self._fail_count >= 3:
+                self._backoff_until = time.time() + 300
             return None
 
 
