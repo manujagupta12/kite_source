@@ -16,7 +16,7 @@ services:
     name: algotrade-backend
     runtime: python
     region:           
-    plan: free
+    plan: 
     rootDir: .
     buildCommand: pip install -r app/backend/requirements.txt
     startCommand: cd app/backend && uvicorn main:app --host 0.0.0.0 --port $PORT
@@ -36,7 +36,7 @@ services:
     name: algotrade-frontend
     runtime: static
     region: 
-    plan: free
+    plan: 
     rootDir: app/frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
