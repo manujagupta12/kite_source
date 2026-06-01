@@ -893,8 +893,8 @@ export default function App(){
           })}
           <div className="nav-sect">Data Sources</div>
           <div className="feed-row feed-ok">◉ NSE Direct API</div>
-          <div className="feed-row feed-ok">◉ MultiTrade (.xls)</div>
-          <div className="feed-row" style={{color:"#22c55e"}}>◉ NSE OI PCR</div>
+          <div className="feed-row" style={{color:"#22c55e"}}>◉ Dhan WebSocket</div>
+          <div className="feed-row" style={{color:"#22c55e"}}>◉ NSE OI / PCR</div>
           <div style={{marginTop:"auto",padding:"10px 6px",borderTop:"1px solid var(--br)"}}>
             <div className="nav-it" onClick={()=>{localStorage.removeItem("tok");setUser(null);}}><span className="nav-ico">↩</span>Logout</div>
           </div>
@@ -904,7 +904,7 @@ export default function App(){
         <IndexTicker indices={indices}/>
         <header className="topbar">
           <div className="regime-pill"><div className="pulse" style={{background:rCol}}/><span style={{color:rCol,fontWeight:700,fontSize:10}}>{regime?.regime||"DETECTING…"}</span></div>
-          <div className="src-pill"><div className="pulse" style={{background:"var(--grn)",width:5,height:5}}/>NSE + PCR</div>
+          <div className="src-pill"><div className="pulse" style={{background:"var(--grn)",width:5,height:5}}/>NSE · Dhan · PCR</div>
           <div className="topbar-right">
             {regime?.vix!=null&&<div className="badge" style={{color:rCol}}>VIX {regime.vix}</div>}
             {pcrCount>0&&<div className="badge" style={{color:"#22c55e",borderColor:"rgba(34,197,94,.2)"}}>PCR●{pcrCount}</div>}
