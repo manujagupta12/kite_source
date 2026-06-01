@@ -554,22 +554,7 @@ async def lifespan(app:FastAPI):
         _db["users"]["demo@algotrade.in"]={"name":"Demo User","email":"demo@algotrade.in",
             "password":hash_password("demo123"),"plan":"monthly","billing":"monthly",
             "joined":str(date.today()),"daily_target":50000,"plan_expiry":str(date.today()+timedelta(days=30))}
-    logging.info(f"  AlgoTrade API v3.4  NSE:{_NSE_OK}  PCR:{_PCR_OK}  TradeLogger:{_TL_OK}  Dhan:{_DHAN_OK}")
-    # Warm up nsepython on startup so first indices fetch is fast
-    import threading
-    def _warmup():
-        try:
-            from nsepython import nsefetch
-            data = nsefetch("https://www.nseindia.com/api/allIndices")
-            items = data.get("data", [])
-            nifty = next((x for x in items if x.get("index") == "NIFTY 50"), None)
-            if nifty:
-                logging.info(f"[NSE] Warmup OK — NIFTY={nifty.get('last')}")
-            else:
-                logging.warning("[NSE] Warmup returned no data")
-        except Exception as e:
-            logging.warning(f"[NSE] Warmup failed: {e}")
-    threading.Thread(target=_warmup, daemon=True).start()
+    logging.info("AlgoTrade v3.4 started — http://localhost:8000")
     if _DHAN_OK:
         # BANKNIFTY spot + near/far CE/PE tokens (standard Dhan security_ids)
         start_dhan_ticker([260105, 260106])
@@ -994,7 +979,6 @@ def _fetch_movers() -> dict:
     global _movers_cache, _movers_ts
     if _movers_cache and time.time() - _movers_ts < 60:
         return _movers_cache
-    _nse_refresh()
     try:
         # NSE provides pre-computed gainers/losers — no per-stock calls needed
         raw = _nsefetch("https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O")
@@ -1095,6 +1079,13 @@ def health_check():
 def root(): return {"message":"AlgoTrade API v3.4 — NSE Direct API","docs":"/docs","health":"/health"}
 
 if __name__ == "__main__":
-    # reload=False — reload=True kills all WebSocket connections on every file change
+    # Suppress noisy access log lines for WS and health endpoints
+    import logging as _uvlog
+    class _QuietFilter(logging.Filter):
+        _SKIP = {"/health", "/ws/signals", "/indices", "/favicon"}
+        def filter(self, record):
+            msg = record.getMessage()
+            return not any(s in msg for s in self._SKIP)
+    _uvlog.getLogger("uvicorn.access").addFilter(_QuietFilter())
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False,
-                log_level="info", ws_ping_interval=20, ws_ping_timeout=30)
+                log_level="warning", ws_ping_interval=20, ws_ping_timeout=30)
