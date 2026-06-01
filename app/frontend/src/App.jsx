@@ -420,6 +420,14 @@ function PcrOiChart({history}){
   </div>);
 }
 
+function SourceBadge({source}){
+  if(!source)return null;
+  const s=source.toUpperCase();
+  if(s==="NSE_LIVE"||s==="NSE_CACHED")return <span className="sig-source-badge src-live">● LIVE</span>;
+  if(s==="NSE_EOD"||s==="PCR_LIVE")return <span className="sig-source-badge src-eod">● EOD</span>;
+  if(s==="DEMO"||s==="MOCK"||s==="PCR_MOCK")return <span className="sig-source-badge src-demo">◎ DEMO</span>;
+  return <span className="sig-source-badge src-demo">◎ {s}</span>;
+}
 function SigCard({sig,pcrHistory,onLogTrade}){
   const isPcr=(sig.strategy||"").toUpperCase().includes("PCR")||sig.source==="pcr_strategy"||sig.source==="pcr_mock";
   const isEq=sig.market==="EQUITY";
@@ -472,7 +480,7 @@ function SigCard({sig,pcrHistory,onLogTrade}){
     const ltp=sig.ltp||sig.spot||0;const chg=sig.change_pct||0;
     return(<div className={`sig-card ${sigClass(sig.direction)}`}>
       <div className="sig-top"><div>
-        <div className="sig-strat" style={{color:info.color}}>{sig.strategy}</div>
+        <div className="sig-strat" style={{color:info.color}}>{sig.strategy}<SourceBadge source={sig.source}/></div>
         <div className="sig-tags">
           <span className="sig-tag" style={{background:"rgba(167,139,250,.12)",color:"var(--pur)",border:"1px solid rgba(167,139,250,.2)"}}>EQUITY</span>
           <span className="sig-tag" style={{background:info.color+"18",color:info.color,border:`1px solid ${info.color}30`}}>{info.tag}</span>
