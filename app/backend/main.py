@@ -547,10 +547,10 @@ async def lifespan(app:FastAPI):
         # BANKNIFTY spot + near/far CE/PE tokens (standard Dhan security_ids)
         start_dhan_ticker([260105, 260106])
         logging.info("[Dhan] WebSocket ticker started")
-    asyncio.create_task(indices_loop())
-    asyncio.create_task(signal_loop())
+    t1 = asyncio.create_task(indices_loop())
+    t2 = asyncio.create_task(signal_loop())
     yield
-    task.cancel()
+    t1.cancel(); t2.cancel()
 
 app=FastAPI(title="AlgoTrade API",version="3.4.0",lifespan=lifespan)
 app.add_middleware(CORSMiddleware,
