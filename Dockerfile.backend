@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 LABEL maintainer="manujagupta12"
-LABEL version="1.0.0"
+LABEL version="1.0.1"
 LABEL description="AlgoTrade NSE F&O Signal Platform - Backend API"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -13,7 +13,8 @@ WORKDIR /app
 COPY app/backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy algo strategies (.dockerignore excludes node_modules/__pycache__)
+# Copy algo package (includes __init__.py for proper module resolution)
+# Note: .dockerignore excludes __pycache__, node_modules, .env, data/
 COPY algo/ ./algo/
 
 # Copy backend source
