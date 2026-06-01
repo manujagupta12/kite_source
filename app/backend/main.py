@@ -757,18 +757,20 @@ def _fallback_candles(symbol: str, interval: int, n: int = 60) -> list:
 def get_chart_data(symbol: str, interval: str = "5"):
     symbol = symbol.upper()
     ivl = max(1, int(interval)) if interval.isdigit() else 5
-    # Try live NSE intraday data first
-    candles_1m = _fetch_nse_intraday(symbol)
-    if candles_1m:
-        candles = _resample_candles(candles_1m, ivl)
-        source = "NSE_LIVE"
-    else:
-        candles = _fallback_candles(symbol, ivl)
-        source = "FALLBACK"
-    current_price = candles[-1]["close"] if candles else 0
+    # Return fallback immediately if no cache — don't block the request
+    cached = _chart_cache.get(symbol)
+    if cached and time.time() - cached["ts"] < _CHART_TTL:
+        candles = _resample_candles(cached["candles"], ivl)
+        return {"symbol": symbol, "interval": interval, "candles": candles,
+                "current_price": candles[-1]["close"] if candles else 0,
+                "source": "NSE_CACHED", "timestamp": datetime.now().isoformat()}
+    # No cache — return fallback instantly, trigger background fetch
+    candles = _fallback_candles(symbol, ivl)
+    import threading
+    threading.Thread(target=_fetch_nse_intraday, args=(symbol,), daemon=True).start()
     return {"symbol": symbol, "interval": interval, "candles": candles,
-            "current_price": current_price, "source": source,
-            "timestamp": datetime.now().isoformat()}
+            "current_price": candles[-1]["close"] if candles else 0,
+            "source": "FALLBACK", "timestamp": datetime.now().isoformat()}
 
 # ── Trader Logger ─────────────────────────────────────────────────────────
 @app.get("/tradelog/today")
@@ -974,7 +976,14 @@ def analytics_pnl(user=Depends(get_current_user)):
 
 # ── Indices / Movers ──────────────────────────────────────────────────────
 @app.get("/indices")
-def get_indices(): return {"indices":_fetch_live_indices()}
+def get_indices():
+    # Serve from in-memory cache instantly — populated by indices_loop background task
+    cached = [v for v in _latest_indices_map.values()]
+    if cached:
+        return {"indices": sorted(cached, key=lambda x: IDX_ORDER.index(x["label"]) if x["label"] in IDX_ORDER else 99)}
+    # First load — fetch synchronously once
+    indices = _fetch_live_indices()
+    return {"indices": indices}
 
 # ── Movers cache ──────────────────────────────────────────────────────────
 _movers_cache: dict = {}
@@ -1034,6 +1043,12 @@ def _fetch_movers() -> dict:
 
 @app.get("/movers")
 def get_movers():
+    return _fetch_movers()
+
+@app.get("/movers/refresh")
+def refresh_movers():
+    global _movers_ts
+    _movers_ts = 0  # force refresh
     return _fetch_movers()
 
 # ── WebSocket ─────────────────────────────────────────────────────────────
