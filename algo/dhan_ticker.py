@@ -118,8 +118,11 @@ def start_dhan_ticker(instrument_tokens: list[int]) -> bool:
             dhan_context = DhanContext(client_id, access_token)
 
             # Subscription: (exchange_segment, security_id, feed_type)
+            # NSE_FNO=2, Full=21 are class attrs on DhanFeed in dhanhq>=2.0
+            NSE_FNO = getattr(marketfeed, 'NSE_FNO', None) or getattr(marketfeed.DhanFeed, 'NSE_FNO', 2)
+            FULL    = getattr(marketfeed, 'Full',    None) or getattr(marketfeed.DhanFeed, 'Full',    21)
             subscriptions = [
-                (marketfeed.NSE_FNO, str(token), marketfeed.Full)
+                (NSE_FNO, str(token), FULL)
                 for token in instrument_tokens
             ]
 
