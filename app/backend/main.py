@@ -26,7 +26,12 @@ try:
 except ImportError:
     _BCRYPT_OK = False
 
+# _ALGO_DIR resolves correctly in both local dev and Docker:
+#   Local:  app/backend/main.py -> .parent.parent.parent / "algo" = project_root/algo
+#   Docker: /app/main.py        -> .parent / "algo" = /app/algo   (Docker COPY puts it there)
 _ALGO_DIR = Path(__file__).parent.parent.parent / "algo"
+if not _ALGO_DIR.exists():
+    _ALGO_DIR = Path(__file__).parent / "algo"   # Docker path fallback
 sys.path.insert(0, str(_ALGO_DIR))
 
 # ── Data provider — NSE Direct API (replaces multitrade_loader / XLS) ──────
