@@ -1305,7 +1305,7 @@ function StrategyTrustPanel(){
   );
 }
 
-export default 
+
 function RiskFooter(){
   return(<footer style={{
     flexShrink:0,
