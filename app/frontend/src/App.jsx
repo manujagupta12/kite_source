@@ -630,14 +630,11 @@ function DataQualityBanner(){
   }
 
   if(health.data_quality==="UNAVAILABLE"){
-    return(<div style={{padding:"10px 14px",background:"rgba(255,61,90,.06)",
-      border:"1px solid rgba(255,61,90,.2)",borderRadius:8,marginBottom:12,
-      fontFamily:"var(--mono)",fontSize:10}}>
-      <div style={{color:"var(--red)",fontWeight:700,marginBottom:4}}>⚠ NSE DATA UNAVAILABLE</div>
-      <div style={{color:"var(--muted)",fontSize:9}}>
-        No live signals are being generated. All mock/demo signals have been hidden.
-        Signals will appear automatically once NSE connection is established during market hours (Mon–Fri 9:15–15:30 IST).
-      </div>
+    return(<div style={{display:"flex",alignItems:"center",gap:7,padding:"4px 10px",
+      borderBottom:"1px solid rgba(255,61,90,.1)",marginBottom:10,
+      fontSize:9,fontFamily:"var(--mono)",color:"var(--dim)"}}>
+      <span style={{width:5,height:5,borderRadius:"50%",background:"var(--red)",display:"inline-block",opacity:.5}}/>
+      <span>NSE API not connected — live signals will appear during market hours (Mon–Fri 9:15–15:30 IST)</span>
     </div>);
   }
 
@@ -1488,8 +1485,8 @@ function App(){
           {tab==="why"&&<StrategyTrustPanel/>}
           {tab==="subscription"&&<SubscriptionTab user={user}/>}
         </div>
+        <RiskFooter/>
       </div>
-      <RiskFooter/>
       <nav className="mob-nav">{MOB_NAV.map(n=>(<div key={n.id} className={`mob-nav-it ${tab===n.id?"act":""}`} onClick={()=>setTabP(n.id)}><span className="mob-nav-ico">{n.ico}</span><span className="mob-nav-lbl">{n.lbl}</span></div>))}</nav>
     </div>
   </>);
