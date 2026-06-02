@@ -1481,7 +1481,7 @@ function App(){
         <div className="content">
           {tab==="signals"&&<><div className="stats-grid" style={{marginBottom:12}}>{[{l:"Total",v:signals.length,c:"var(--acc)"},{l:"F&O",v:foCount,c:"var(--grn)"},{l:"PCR",v:pcrCount,c:"#22c55e"},{l:"Equity",v:signals.filter(s=>s.market==="EQUITY").length,c:"var(--pur)"}].map((s,i)=>(<div key={i} className="stat-card"><div className="stat-lbl">{s.l}</div><div className="stat-val" style={{color:s.c}}>{s.v}</div>{i===0&&<div className="stat-sub">{mkt!=="ALL"?mkt:"All"}{strat?" · "+strat:""}</div>}</div>))}</div><SignalsTab signals={signals} market={mkt} strategy={strat} indices={indices} onClearStrategy={()=>setStratP(null)} pcrHistory={pcrHistory} onLogTrade={setLogModal} onPlaceOrder={setPlaceModal} userPlan={user?.plan||"free"}/></> }
           {tab==="tradelog"&&<TraderLoggerTab/>}
-                 {tab==="analytics"&&<AnalyticsTab/>}
+          {tab==="analytics"&&<AnalyticsTab/>}
           {tab==="paper"&&<PaperTab/>}
           {tab==="margin"&&<MarginTab/>}
           {tab==="broker"&&<BrokerTab userPlan={user?.plan||"free"}/>}
