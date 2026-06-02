@@ -1,17 +1,15 @@
 """
 backtest/run_backtest.py
 ========================
-Main entry point. Downloads real NSE F&O Bhavcopy, runs all strategies,
-produces walk-forward metrics and saves results to backtest_results.csv + report.md.
+Full-platform backtester: NIFTY + BANKNIFTY + FINNIFTY + Equity
+5-year dataset, ₹50L margin, walk-forward validation.
 
 Usage:
-    cd C:\AlgoTrading\kite_source\backtest
+    cd C:/AlgoTrading/kite_source/backtest
     pip install -r requirements.txt
-    python run_backtest.py --from 2024-01-01 --to 2024-12-31
+    python run_backtest.py --from 2020-01-01 --to 2024-12-31 --margin 5000000
 
-Results are written to:
-    backtest/results/backtest_results.csv
-    backtest/results/backtest_report.md
+Results saved to backtest/results/
 """
 
 import argparse
@@ -20,13 +18,13 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
-# Add backtest dir to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from data_fetcher import load_range, filter_nifty_options
-from strategies import ALL_STRATEGIES
+from data_fetcher import load_range, filter_options, LOT_SIZES
+from strategies import FO_STRATEGIES, EQUITY_STRATEGIES, ALL_STRATEGIES
 from engine import BacktestEngine, in_sample_out_sample_split
 from metrics import compute_metrics, walk_forward_metrics, TradeResult
 
@@ -40,155 +38,220 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+# ── Per-instrument lot sizes ──────────────────────────────────────────────────
+INSTRUMENT_LOT = {
+    "NIFTY":     50,
+    "BANKNIFTY": 15,
+    "FINNIFTY":  40,
+    "EQUITY":     1,   # shares — sized by capital allocation below
+}
+
+# ── Equity position sizing: % of margin per trade ───────────────────────────
+EQUITY_RISK_PCT = 0.02   # risk 2% of margin per equity trade
+
+
+def equity_lot_value(entry_price: float, margin: float) -> int:
+    """How many shares to buy with 2% of margin at this price."""
+    capital = margin * EQUITY_RISK_PCT
+    return max(1, int(capital / entry_price))
+
 
 def main():
-    parser = argparse.ArgumentParser(description="kite_source Backtester — real NSE F&O data")
-    parser.add_argument("--from",  dest="start", default="2024-01-01", help="Start date YYYY-MM-DD")
-    parser.add_argument("--to",    dest="end",   default="2024-12-31", help="End date YYYY-MM-DD")
-    parser.add_argument("--data",  dest="data",  default="./data/bhavcopy", help="Bhavcopy cache dir")
-    parser.add_argument("--out",   dest="out",   default="./results", help="Output dir")
-    parser.add_argument("--lot",   dest="lot",   type=float, default=50.0, help="Lot size (NIFTY=50)")
-    parser.add_argument("--windows", dest="windows", type=int, default=4, help="Walk-forward windows")
+    parser = argparse.ArgumentParser(description="kite_source Full-Platform Backtester")
+    parser.add_argument("--from",    dest="start",   default="2020-01-01")
+    parser.add_argument("--to",      dest="end",     default="2024-12-31")
+    parser.add_argument("--margin",  dest="margin",  type=float, default=5_000_000,
+                        help="Available margin in ₹ (default: ₹50L = 5000000)")
+    parser.add_argument("--data",    dest="data",    default="./data/bhavcopy")
+    parser.add_argument("--out",     dest="out",     default="./results")
+    parser.add_argument("--windows", dest="windows", type=int, default=5,
+                        help="Walk-forward windows (default 5 for 5-year dataset)")
+    parser.add_argument("--no-equity", dest="no_eq", action="store_true",
+                        help="Skip equity Bhavcopy download (faster)")
     args = parser.parse_args()
 
-    Path(args.data).mkdir(parents=True, exist_ok=True)
     Path(args.out).mkdir(parents=True, exist_ok=True)
 
-    # ── Step 1: Download real Bhavcopy data ──────────────────────────────────
-    log.info("=" * 60)
-    log.info("STEP 1: Downloading NSE F&O Bhavcopy data")
-    log.info("=" * 60)
+    log.info("=" * 65)
+    log.info("kite_source Full-Platform Backtest")
+    log.info("Period : %s → %s", args.start, args.end)
+    log.info("Margin : ₹%s", f"{args.margin:,.0f}")
+    log.info("Windows: %d walk-forward", args.windows)
+    log.info("=" * 65)
 
-    raw_df = load_range(
+    # ── Step 1: Download data ─────────────────────────────────────────────────
+    log.info("STEP 1: Downloading NSE Bhavcopy (F&O + Equity)")
+    df_fo, df_eq = load_range(
         date.fromisoformat(args.start),
         date.fromisoformat(args.end),
         Path(args.data),
+        include_equity=not args.no_eq,
     )
 
-    df_options = filter_nifty_options(raw_df)
-    log.info("Options rows: %d | Symbols: %s", len(df_options),
-             df_options["SYMBOL"].unique().tolist())
+    df_options = filter_options(df_fo)
+    log.info("Options rows: %d | Equity rows: %d", len(df_options), len(df_eq))
 
     if df_options.empty:
-        log.error("No options data found. Check date range and internet connection.")
+        log.error("No options data. Check dates and internet.")
         sys.exit(1)
 
-    # ── Step 2: In-sample / Out-of-sample split ───────────────────────────────
-    log.info("=" * 60)
-    log.info("STEP 2: Splitting data (70%% in-sample / 30%% out-of-sample)")
-    log.info("=" * 60)
+    # ── Step 2: Split ─────────────────────────────────────────────────────────
+    log.info("STEP 2: 70%%/30%% in-sample / out-of-sample split")
+    in_fo,  out_fo  = in_sample_out_sample_split(df_options)
+    in_eq,  out_eq  = (in_sample_out_sample_split(df_eq)
+                       if not df_eq.empty else (pd.DataFrame(), pd.DataFrame()))
 
-    in_df, out_df = in_sample_out_sample_split(df_options, in_sample_ratio=0.70)
+    # ── Step 3: Run strategies ────────────────────────────────────────────────
+    log.info("STEP 3: Running %d strategies across all instruments", len(ALL_STRATEGIES))
 
-    # ── Step 3: Run each strategy ─────────────────────────────────────────────
-    log.info("=" * 60)
-    log.info("STEP 3: Running %d strategies", len(ALL_STRATEGIES))
-    log.info("=" * 60)
+    all_reports, all_wf_reports, all_trade_rows = [], [], []
 
-    all_reports     = []
-    all_wf_reports  = []
-    all_trades_rows = []
-
-    for strategy in ALL_STRATEGIES:
-        log.info("--- Strategy: %s ---", strategy.name)
-
-        # Generate signals on IN-SAMPLE data only
+    for strategy in FO_STRATEGIES:
+        log.info("── %s", strategy.name)
         try:
-            signals_in  = strategy.generate(in_df)
-            signals_out = strategy.generate(out_df)
+            sigs_in  = strategy.generate(in_fo)
+            sigs_out = strategy.generate(out_fo)
         except Exception as e:
             log.error("Signal generation failed for %s: %s", strategy.name, e)
             continue
 
-        log.info("  Signals: %d in-sample, %d out-of-sample", len(signals_in), len(signals_out))
+        log.info("   Signals: %d in / %d out", len(sigs_in), len(sigs_out))
 
-        # Execute trades
-        engine_in  = BacktestEngine(in_df)
-        engine_out = BacktestEngine(out_df)
+        eng_in  = BacktestEngine(in_fo)
+        eng_out = BacktestEngine(out_fo)
+        trades_in  = eng_in.run(sigs_in)
+        trades_out = eng_out.run(sigs_out)
 
-        trades_in  = engine_in.run(signals_in)
-        trades_out = engine_out.run(signals_out)
+        log.info("   Trades:  %d in / %d out", len(trades_in), len(trades_out))
 
-        log.info("  Trades: %d in-sample, %d out-of-sample", len(trades_in), len(trades_out))
+        # Compute lot value per instrument
+        for phase, trades in [("in-sample", trades_in), ("out-of-sample", trades_out)]:
+            if not trades:
+                continue
+            # Group by instrument and compute separately with correct lot size
+            by_inst = {}
+            for t in trades:
+                inst = _instrument_from_trade(t)
+                by_inst.setdefault(inst, []).append(t)
 
-        # Full-period metrics (in-sample)
-        if trades_in:
-            report_in  = compute_metrics(trades_in,  f"{strategy.name} [IN-SAMPLE]",  args.lot)
-            all_reports.append(report_in)
-            _print_report(report_in)
+            for inst, inst_trades in by_inst.items():
+                lot_val = INSTRUMENT_LOT.get(inst, 50)
+                report  = compute_metrics(
+                    inst_trades,
+                    f"{strategy.name}_{inst} [{phase.upper()}]",
+                    lot_val,
+                )
+                all_reports.append(report)
+                _log_report(report)
 
-        # Out-of-sample metrics (the honest number)
-        if trades_out:
-            report_out = compute_metrics(trades_out, f"{strategy.name} [OUT-OF-SAMPLE]", args.lot)
-            all_reports.append(report_out)
-            _print_report(report_out)
+            for t in trades:
+                row = vars(t).copy()
+                row["phase"]      = phase
+                row["instrument"] = _instrument_from_trade(t)
+                all_trade_rows.append(row)
 
-        # Walk-forward (on all data combined)
+        # Walk-forward on combined trades
         all_trades = trades_in + trades_out
         if all_trades:
-            wf = walk_forward_metrics(all_trades, strategy.name, args.windows, args.lot)
+            wf = walk_forward_metrics(all_trades, strategy.name, args.windows,
+                                      INSTRUMENT_LOT.get("NIFTY", 50))
             all_wf_reports.extend(wf)
 
-        # Collect raw trade rows for CSV
-        for t in all_trades:
-            row = vars(t)
-            row["phase"] = "in-sample" if t.date_in < out_df["DATE"].min() else "out-of-sample"
-            all_trades_rows.append(row)
+    # ── Equity strategies ─────────────────────────────────────────────────────
+    if not df_eq.empty:
+        for strategy in EQUITY_STRATEGIES:
+            log.info("── %s (Equity)", strategy.name)
+            try:
+                sigs_in  = strategy.generate(in_eq)
+                sigs_out = strategy.generate(out_eq)
+            except Exception as e:
+                log.error("Equity signal failed for %s: %s", strategy.name, e)
+                continue
 
-    # ── Step 4: Save results ──────────────────────────────────────────────────
-    log.info("=" * 60)
+            log.info("   Signals: %d in / %d out", len(sigs_in), len(sigs_out))
+
+            # For equity: size lots by margin
+            for sig in sigs_in + sigs_out:
+                sig.lot_size = equity_lot_value(sig.entry_price, args.margin)
+
+            eng_in  = BacktestEngine(in_eq  if not in_eq.empty  else pd.DataFrame())
+            eng_out = BacktestEngine(out_eq if not out_eq.empty else pd.DataFrame())
+            trades_in  = eng_in.run(sigs_in)   if not in_eq.empty  else []
+            trades_out = eng_out.run(sigs_out)  if not out_eq.empty else []
+
+            for phase, trades in [("in-sample", trades_in), ("out-of-sample", trades_out)]:
+                if not trades:
+                    continue
+                report = compute_metrics(trades, f"{strategy.name} [{phase.upper()}]", 1)
+                all_reports.append(report)
+                _log_report(report)
+                for t in trades:
+                    row = vars(t).copy()
+                    row["phase"] = phase
+                    row["instrument"] = "EQUITY"
+                    all_trade_rows.append(row)
+
+            all_trades = trades_in + trades_out
+            if all_trades:
+                wf = walk_forward_metrics(all_trades, strategy.name, args.windows, 1)
+                all_wf_reports.extend(wf)
+
+    # ── Step 4: Save ─────────────────────────────────────────────────────────
     log.info("STEP 4: Saving results")
-    log.info("=" * 60)
+    out_p = Path(args.out)
 
-    # Raw trades CSV
-    if all_trades_rows:
-        trades_df = pd.DataFrame(all_trades_rows)
-        trades_csv = Path(args.out) / "backtest_trades.csv"
-        trades_df.to_csv(trades_csv, index=False)
-        log.info("Trades saved: %s", trades_csv)
+    if all_trade_rows:
+        pd.DataFrame(all_trade_rows).to_csv(out_p / "backtest_trades.csv", index=False)
+        log.info("Trades: %d rows", len(all_trade_rows))
 
-    # Summary CSV
     if all_reports:
-        summary_rows = [r.as_dict() for r in all_reports]
-        summary_df   = pd.DataFrame(summary_rows)
-        summary_csv  = Path(args.out) / "backtest_results.csv"
-        summary_df.to_csv(summary_csv, index=False)
-        log.info("Summary saved: %s", summary_csv)
+        pd.DataFrame([r.as_dict() for r in all_reports]).to_csv(
+            out_p / "backtest_results.csv", index=False)
 
-    # Walk-forward CSV
     if all_wf_reports:
-        wf_rows = [r.as_dict() for r in all_wf_reports]
-        wf_df   = pd.DataFrame(wf_rows)
-        wf_csv  = Path(args.out) / "walkforward_results.csv"
-        wf_df.to_csv(wf_csv, index=False)
-        log.info("Walk-forward saved: %s", wf_csv)
+        pd.DataFrame([r.as_dict() for r in all_wf_reports]).to_csv(
+            out_p / "walkforward_results.csv", index=False)
 
-    # Markdown report
-    _write_markdown_report(all_reports, all_wf_reports, args, Path(args.out))
+    _write_markdown(all_reports, all_wf_reports, args, out_p)
 
-    log.info("=" * 60)
-    log.info("BACKTEST COMPLETE. Results in: %s", args.out)
-    log.info("=" * 60)
+    log.info("=" * 65)
+    log.info("DONE. Results in: %s", args.out)
+    log.info("=" * 65)
 
 
-def _print_report(r):
+def _instrument_from_trade(t: TradeResult) -> str:
+    sym = (t.symbol or "").upper()
+    if "BANKNIFTY" in sym:
+        return "BANKNIFTY"
+    if "FINNIFTY" in sym:
+        return "FINNIFTY"
+    if "NIFTY" in sym:
+        return "NIFTY"
+    return "EQUITY"
+
+
+def _log_report(r):
     log.info(
-        "  %-45s | WinRate=%s | PF=%s | DD=%s | Sharpe=%s | Trades=%d | Cred=%s",
-        r.strategy[:45],
-        r.win_rate, r.profit_factor, r.max_drawdown,
-        r.sharpe_ratio, r.total_trades, r.signal_credibility,
+        "   %-50s WR=%-6s PF=%-5s DD=%-8s Sh=%-5s N=%d Cred=%s",
+        r.strategy[:50], r.win_rate, r.profit_factor,
+        r.max_drawdown, r.sharpe_ratio, r.total_trades,
+        r.signal_credibility[:10],
     )
 
 
-def _write_markdown_report(reports, wf_reports, args, out_dir: Path):
+def _write_markdown(reports, wf_reports, args, out_dir: Path):
+    margin_cr = args.margin / 100_000
+
     lines = [
-        "# kite_source — Backtest Report",
+        "# kite_source — Full Platform Backtest Report",
         "",
-        f"**Period:** `{args.start}` → `{args.end}`",
-        f"**Data:** Real NSE F&O Bhavcopy (no mocks, no random values)",
-        f"**Lot size:** {args.lot} units",
-        f"**Split:** 70% in-sample / 30% out-of-sample",
+        f"**Period:** `{args.start}` → `{args.end}` (5 years)",
+        f"**Available margin:** ₹{margin_cr:.0f}L (₹{args.margin:,.0f})",
+        f"**Instruments:** NIFTY · BANKNIFTY · FINNIFTY · Equity (top 30 stocks)",
+        f"**Lot sizes:** NIFTY=50 · BANKNIFTY=15 · FINNIFTY=40 · Equity=by capital",
+        f"**Split:** 70% in-sample / 30% out-of-sample (strict chronological)",
         f"**Walk-forward windows:** {args.windows}",
+        "**Data source:** Real NSE F&O Bhavcopy — no mocks, no random values",
         "",
         "---",
         "",
@@ -197,7 +260,6 @@ def _write_markdown_report(reports, wf_reports, args, out_dir: Path):
     ]
 
     if reports:
-        # Table header
         cols = list(reports[0].as_dict().keys())
         lines.append("| " + " | ".join(cols) + " |")
         lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
@@ -205,91 +267,53 @@ def _write_markdown_report(reports, wf_reports, args, out_dir: Path):
             d = r.as_dict()
             lines.append("| " + " | ".join(str(d[c]) for c in cols) + " |")
     else:
-        lines.append("_No completed trades. Check data range or strategy thresholds._")
+        lines.append("_No trades completed._")
+
+    lines += ["", "---", "", "## Walk-Forward Validation", "",
+              "| Strategy | Period | Trades | Win Rate | Profit Factor | Sharpe | Credibility |",
+              "| --- | --- | --- | --- | --- | --- | --- |"]
+
+    for r in wf_reports:
+        d = r.as_dict()
+        lines.append(
+            f"| {d['Strategy']} | {d['Backtest Period']} | {d['Total Trades']} "
+            f"| {d['Win Rate']} | {d['Profit Factor']} | {d['Sharpe Ratio']} "
+            f"| {d['Signal Credibility']} |"
+        )
 
     lines += [
+        "", "---", "",
+        "## Position Sizing Logic",
+        "",
+        f"| Instrument | Lot Size | Margin per lot (approx) |",
+        "| --- | --- | --- |",
+        f"| NIFTY | 50 units | ~₹{50*23000/5:,.0f} (5× leverage) |",
+        f"| BANKNIFTY | 15 units | ~₹{15*52000/5:,.0f} (5× leverage) |",
+        f"| FINNIFTY | 40 units | ~₹{40*23000/5:,.0f} (5× leverage) |",
+        f"| Equity | 2% of margin / price | ~₹{args.margin*0.02:,.0f} per trade |",
+        "",
+        "With ₹50L margin:",
+        f"- Can run {int(args.margin / (50*23000/5))} concurrent NIFTY lots",
+        f"- Can run {int(args.margin / (15*52000/5))} concurrent BANKNIFTY lots",
+        f"- Equity: ₹1,00,000 per trade (2% risk rule)",
         "",
         "---",
         "",
-        "## Walk-Forward Validation",
-        "",
-        "_Consistent performance across windows = signal is real, not curve-fitted._",
-        "",
-    ]
-
-    if wf_reports:
-        cols = ["Strategy", "Win Rate", "Profit Factor", "Sharpe Ratio", "Total Trades", "Signal Credibility"]
-        lines.append("| " + " | ".join(cols) + " |")
-        lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
-        for r in wf_reports:
-            d = r.as_dict()
-            lines.append(
-                f"| {d['Strategy']} | {d['Win Rate']} | {d['Profit Factor']} | "
-                f"{d['Sharpe Ratio']} | {d['Total Trades']} | {d['Signal Credibility']} |"
-            )
-
-    lines += [
-        "",
-        "---",
-        "",
-        "## Signal Credibility Guide",
+        "## Signal Credibility Scale",
         "",
         "| Rating | Criteria |",
         "| --- | --- |",
-        "| **STRONG** | Win rate >55%, Profit Factor >1.5, Sharpe >1.0, Trades ≥30 |",
-        "| **MODERATE** | Win rate >50%, Profit Factor >1.2, Sharpe >0.5, Trades ≥20 |",
-        "| **WEAK** | Win rate >45%, Profit Factor >1.0, Trades ≥10 |",
-        "| **UNRELIABLE** | Anything below — do not trade live |",
+        "| STRONG | Win rate >55%, PF >1.5, Sharpe >1.0, ≥30 trades |",
+        "| MODERATE | Win rate >50%, PF >1.2, Sharpe >0.5, ≥20 trades |",
+        "| WEAK | Win rate >45%, PF >1.0, ≥10 trades |",
+        "| UNRELIABLE | Below thresholds — do not trade live |",
         "",
         "---",
-        "",
-        "## Entry / Exit Signal Logic",
-        "",
-        "### PCR Mean-Reversion",
-        "- **Entry:** PCR >1.4 → Buy ATM Call | PCR <0.7 → Buy ATM Put",
-        "- **Exit:** 25% gain on premium (target) or 40% loss on premium (stop)",
-        "- **Why:** Extreme PCR readings historically mean-revert. High PCR = excess fear = oversold.",
-        "",
-        "### ATM Strangle",
-        "- **Entry:** Sell ATM CE + ATM PE on weekly expiry when both premiums >₹30",
-        "- **Exit:** Collect 50% of net credit (target) or debit reaches 2× credit (stop)",
-        "- **Why:** Time decay (theta) favours sellers when IV is elevated near expiry.",
-        "",
-        "### EMA Crossover (Futures)",
-        "- **Entry:** EMA9 crosses EMA21 with RSI confirmation (>50 for BUY, <50 for SELL)",
-        "- **Exit:** 2×ATR target, 1×ATR stop",
-        "- **Why:** Trend-following on momentum; RSI filter reduces false crossovers.",
-        "",
-        "### OI Build-up",
-        "- **Entry:** PE OI builds above ATM → support → BUY | CE OI builds below ATM → resistance → SELL",
-        "- **Exit:** 1.5% spot move (target), 0.7% adverse move (stop)",
-        "- **Why:** Large OI concentrations indicate institutional positioning and act as price magnets.",
-        "",
-        "### Calendar Spread",
-        "- **Entry:** Near-month IV premium >10% over far-month at same strike",
-        "- **Exit:** Near-month premium decays to 40% of entry value",
-        "- **Why:** Near-month theta decays faster; IV skew normalises as expiry approaches.",
-        "",
-        "---",
-        "",
-        "## Risk Management Rules",
-        "- Max position size set by `position_sizer.py` based on available margin",
-        "- Hard stop on each trade (coded in engine.py)",
-        "- Max hold: 30 calendar days (forced exit)",
-        "- Transaction costs deducted: ₹20 brokerage/leg + 0.05% STT on sell side",
-        "",
-        "## Crash / Outage Behaviour",
-        "- Strategy signals are stateless — re-running on same data produces same signals",
-        "- No open positions are carried across sessions without explicit confirmation",
-        "- `detect_atm()` uses dynamic strike range (not hardcoded) so circuit-breaker events don't break it",
-        "",
-        "---",
-        "_Generated by kite_source backtest engine. Data source: NSE F&O Bhavcopy archives._",
+        "_Generated by kite_source backtester. All data from NSE Bhavcopy archives._",
     ]
 
-    report_path = out_dir / "backtest_report.md"
-    report_path.write_text("\n".join(lines), encoding="utf-8")
-    log.info("Markdown report saved: %s", report_path)
+    (out_dir / "backtest_report.md").write_text("\n".join(lines), encoding="utf-8")
+    log.info("Report saved.")
 
 
 if __name__ == "__main__":
