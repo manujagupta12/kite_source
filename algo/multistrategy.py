@@ -43,7 +43,7 @@ except ImportError:
         def interactive_input(self, m=""): pass
         def print_daily_summary(self): pass
     logger = _LoggerStub()
-    sys.exit(1)
+    
 
 try:
     from regime_engine import (RegimeEngine, print_regime_report,
