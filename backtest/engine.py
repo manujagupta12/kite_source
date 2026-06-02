@@ -6,11 +6,11 @@ Handles standard directional trades AND multi-leg options strategies
 (strangles, iron condors, calendar spreads) with expiry-aware exits.
 
 Key rules:
-  - Signal on day D → enter at day D+1 (no lookahead)
-  - For options sellers (ATM_Strangle, IronCondor): hold to expiry, collect theta
-    Only exit early if premium hits max_loss_ratio × entry
-  - For options buyers (PCR): exit at fixed target/stop
-  - Transaction costs: ₹20/leg + STT
+  - Signal on day D → enter at day D+1 (no lookahead bias)
+  - Options sellers (ATM_Strangle, IronCondor, CalendarSpread):
+      hold to expiry; only exit early if premium hits max_loss_ratio × entry
+  - Options buyers (PCR, EMA, OI): exit at fixed target/stop
+  - Transaction cost: ₹20/leg + 0.05% STT on sell-side premium
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 
 class BacktestEngine:
-    BROKERAGE_PER_LEG = 20.0   # ₹ per leg per lot
+    BROKERAGE_PER_LEG = 20.0    # ₹ per leg per lot
     STT_SELL_RATE     = 0.0005  # 0.05% on premium for sell-side
 
     def __init__(self, df: pd.DataFrame):
@@ -55,7 +55,7 @@ class BacktestEngine:
 
     # ── Core simulation ───────────────────────────────────────────────────────
 
-    def _simulate(self, sig: Signal):
+    def _simulate(self, sig: Signal) -> Optional[TradeResult]:
         entry_date = self._next_date(sig.date)
         if entry_date is None:
             return None
@@ -70,7 +70,6 @@ class BacktestEngine:
         stop_loss = sig.stop_loss   * ratio
 
         # For option sellers: max_loss_ratio overrides the stop level
-        # Held to expiry unless premium hits max_loss_ratio × entry
         max_loss_ratio = getattr(sig, "max_loss_ratio", None)
 
         idx = self._date_idx.get(entry_date)
@@ -84,163 +83,154 @@ class BacktestEngine:
         for fdate in self.trading_dates[idx + 1:]:
             day_price = self._price(fdate, sig)
 
-            # ── Expiry-based exit (strangles / iron condors / calendars) ──
+            # ── Expiry-based exit (strangles / iron condors / calendars) ──────
             if sig.expiry is not None and fdate >= sig.expiry:
                 # At/past expiry: options settle near 0 → seller collects full credit
-                # Use actual settlement if available, else assume near-0
-                settle = day_price if day_price is not None else 0.0
+                settle      = day_price if day_price is not None else 0.0
                 exit_price  = settle
                 exit_date   = fdate
                 exit_reason = "EXPIRY_SETTLE"
                 break
 
             if day_price is None:
-                # Data gap — treat as expiry at entry (flat)
+                # Data gap — treat as flat exit
                 exit_price  = entry_price
                 exit_date   = fdate
                 exit_reason = "EXPIRY"
                 break
 
-            # ── For options sellers: only early-exit at max_loss_ratio ──────
+            # ── Option sellers: only early-exit at max_loss_ratio ─────────────
             if max_loss_ratio is not None:
                 if day_price >= entry_price * max_loss_ratio:
                     exit_price  = day_price
                     exit_date   = fdate
                     exit_reason = "STOP"
                     break
-                # No target — hold to expiry
+                # Otherwise: hold to expiry — no target exit for sellers
                 continue
 
-            # ── Standard directional exit ────────────────────────────────────
+            # ── Directional buyers/sellers: target / stop ─────────────────────
             if sig.direction == "BUY":
                 if day_price >= target:
-                    exit_price, exit_date, exit_reason = target, fdate, "TARGET"
+                    exit_price, exit_date, exit_reason = day_price, fdate, "TARGET"
                     break
                 if day_price <= stop_loss:
-                    exit_price, exit_date, exit_reason = stop_loss, fdate, "STOP"
+                    exit_price, exit_date, exit_reason = day_price, fdate, "STOP"
                     break
             else:  # SELL
                 if day_price <= target:
-                    exit_price, exit_date, exit_reason = target, fdate, "TARGET"
+                    exit_price, exit_date, exit_reason = day_price, fdate, "TARGET"
                     break
                 if day_price >= stop_loss:
-                    exit_price, exit_date, exit_reason = stop_loss, fdate, "STOP"
+                    exit_price, exit_date, exit_reason = day_price, fdate, "STOP"
                     break
 
-            # Max hold: 30 days for non-expiry strategies
-            if sig.expiry is None and (fdate - entry_date).days > 30:
-                exit_price, exit_date, exit_reason = day_price, fdate, "MAX_HOLD"
-                break
-
+        # If never exited: exit at last available price
         if exit_price is None:
-            exit_price  = entry_price
-            exit_date   = entry_date + pd.Timedelta(days=1)
-            exit_reason = "NO_EXIT_DATA"
+            last_date = self.trading_dates[-1]
+            exit_price = self._price(last_date, sig) or entry_price
+            exit_date  = last_date
+            exit_reason = "EXPIRY"
 
-        # ── P&L ──────────────────────────────────────────────────────────────
-        # For SELL strangles: premium collected at entry, paid back at exit
-        # P&L = entry_premium - exit_premium (profit when exit < entry)
+        # ── P&L calculation ───────────────────────────────────────────────────
+        n_legs = getattr(sig, "n_legs", 1)
+        transaction_cost = self.BROKERAGE_PER_LEG * n_legs * 2  # entry + exit
+
         if sig.direction == "SELL":
-            raw_pnl = entry_price - exit_price
+            # Seller collects entry premium, pays exit premium
+            pnl_raw  = entry_price - exit_price
+            stt      = self.STT_SELL_RATE * entry_price  # STT on sell at entry
         else:
-            raw_pnl = exit_price - entry_price
+            pnl_raw  = exit_price - entry_price
+            stt      = self.STT_SELL_RATE * exit_price   # STT on sell at exit
 
-        n_legs = getattr(sig, "n_legs", 2)  # legs: 2 for strangle, 4 for condor
-        costs  = self.BROKERAGE_PER_LEG * n_legs
-        if sig.direction == "SELL":
-            costs += entry_price * self.STT_SELL_RATE
-
-        net_pnl = raw_pnl - costs
-        pnl_pct = net_pnl / entry_price * 100 if entry_price > 0 else 0
+        pnl     = pnl_raw - (transaction_cost / max(sig.lot_size, 1)) - stt
+        pnl_pct = (pnl / entry_price * 100) if entry_price > 0 else 0.0
 
         return TradeResult(
-            date_in     = entry_date,
-            date_out    = exit_date if exit_date else entry_date,
+            date_in     = pd.Timestamp(entry_date),
+            date_out    = pd.Timestamp(exit_date),
             strategy    = sig.strategy,
             symbol      = sig.symbol,
             direction   = sig.direction,
             entry_price = round(entry_price, 2),
-            exit_price  = round(exit_price, 2),
+            exit_price  = round(exit_price,  2),
             exit_reason = exit_reason,
-            pnl         = round(net_pnl, 2),
+            pnl         = round(pnl, 2),
             pnl_pct     = round(pnl_pct, 2),
             score       = sig.score,
         )
 
     # ── Price lookup ──────────────────────────────────────────────────────────
 
-    def _price(self, dt: pd.Timestamp, sig: Signal):
-        """
-        Price lookup dispatcher:
-          'NIFTY 24000 CE+PE'  → CE_settle + PE_settle at that strike (strangle)
-          'NIFTY 24000 CE'     → specific option settle
-          'NIFTY 24000 CE / 24500 CE'  → iron condor net premium
-          'NIFTY'              → ATM-strike settle (EMA/OI signals)
-        """
+    def _price(self, dt: pd.Timestamp, sig: Signal) -> Optional[float]:
         day = self.df[self.df["DATE"] == dt]
         if day.empty:
             return None
 
         sym = sig.symbol.split()[0].strip().upper()
 
-        # ── Iron condor: "NIFTY IC 24500CE-24000CE+23500PE-23000PE" ──────────
-        if " IC " in sig.symbol or sig.symbol.count("/") >= 3:
+        # Iron Condor: "NIFTY IC sell_ce/buy_ce/sell_pe/buy_pe"
+        if " IC " in sig.symbol:
             return self._price_condor(day, sym, sig.symbol)
 
-        # ── Strangle: "NIFTY 24000 CE+PE" ────────────────────────────────────
+        # Strangle: "NIFTY 24000 CE+PE"
         if "CE+PE" in sig.symbol:
             parts = sig.symbol.split()
-            if len(parts) < 3:
-                return None
-            try:
-                strike = float(parts[1])
-            except ValueError:
-                return None
-            sub = day[(day["SYMBOL"].str.strip().str.upper() == sym) &
-                      (day["STRIKE_PR"] == strike)]
-            ce = pd.to_numeric(sub[sub["OPTION_TYP"].str.upper() == "CE"]["SETTLE_PR"], errors="coerce").dropna()
-            pe = pd.to_numeric(sub[sub["OPTION_TYP"].str.upper() == "PE"]["SETTLE_PR"], errors="coerce").dropna()
-            if ce.empty or pe.empty:
-                return None
-            return float(ce.iloc[0]) + float(pe.iloc[0])
+            if len(parts) >= 3:
+                try:
+                    strike = float(parts[1])
+                except ValueError:
+                    return None
+                sub = day[(day["SYMBOL"].str.strip().str.upper() == sym) &
+                          (day["STRIKE_PR"] == strike)]
+                ce_p = pd.to_numeric(
+                    sub[sub["OPTION_TYP"].str.upper() == "CE"]["SETTLE_PR"],
+                    errors="coerce").dropna()
+                pe_p = pd.to_numeric(
+                    sub[sub["OPTION_TYP"].str.upper() == "PE"]["SETTLE_PR"],
+                    errors="coerce").dropna()
+                if not ce_p.empty and not pe_p.empty:
+                    return float(ce_p.iloc[0]) + float(pe_p.iloc[0])
+            return None
 
-        # ── Specific option: "NIFTY 24000 CE" ────────────────────────────────
+        # Specific option: "NIFTY 24000 CE"
         if "CE" in sig.symbol or "PE" in sig.symbol:
             parts = sig.symbol.split()
-            if len(parts) < 3:
-                return None
-            try:
-                strike = float(parts[1])
-            except ValueError:
-                return None
-            opt_t = parts[2].upper()
-            sub = day[(day["SYMBOL"].str.strip().str.upper() == sym) &
-                      (day["STRIKE_PR"] == strike) &
-                      (day["OPTION_TYP"].str.upper() == opt_t)]
-            p = pd.to_numeric(sub["SETTLE_PR"], errors="coerce").dropna()
-            return float(p.iloc[0]) if not p.empty else None
+            if len(parts) >= 3:
+                try:
+                    strike = float(parts[1])
+                except ValueError:
+                    return None
+                opt_t = parts[2].upper()
+                row   = day[(day["SYMBOL"].str.strip().str.upper() == sym) &
+                            (day["STRIKE_PR"] == strike) &
+                            (day["OPTION_TYP"].str.upper() == opt_t)]
+                if not row.empty:
+                    p = pd.to_numeric(row["SETTLE_PR"], errors="coerce").dropna()
+                    return float(p.iloc[0]) if not p.empty else None
+            return None
 
-        # ── Index (EMA / OI): ATM strike only ────────────────────────────────
+        # Index (EMA / OI): use ATM strike settle price (CE+PE average)
         sub = day[day["SYMBOL"].str.strip().str.upper() == sym]
         if sub.empty:
             return None
         oi = sub.groupby("STRIKE_PR")["OPEN_INT"].sum()
         if oi.empty:
             return None
-        atm = float(oi.idxmax())
+        atm     = float(oi.idxmax())
         atm_sub = sub[sub["STRIKE_PR"] == atm]
-        p = pd.to_numeric(atm_sub["SETTLE_PR"], errors="coerce").dropna()
+        p       = pd.to_numeric(atm_sub["SETTLE_PR"], errors="coerce").dropna()
         return float(p.mean()) if not p.empty else None
 
-    def _price_condor(self, day: pd.DataFrame, sym: str, symbol: str):
+    def _price_condor(self, day: pd.DataFrame, sym: str, symbol: str) -> Optional[float]:
         """
         Iron condor price lookup.
-        Symbol format: "NIFTY IC sell_ce/buy_ce/sell_pe/buy_pe"
-        e.g. "NIFTY IC 24500/25000/23500/23000"
-        Returns net premium = (sell_ce + sell_pe) - (buy_ce + buy_pe)
+        Symbol: "NIFTY IC sell_ce/buy_ce/sell_pe/buy_pe"
+        Returns current net debit (negative of current P&L for seller).
         """
         try:
-            parts = symbol.split("IC")[1].strip().split("/")
+            parts     = symbol.split("IC")[1].strip().split("/")
             sell_ce_k = float(parts[0])
             buy_ce_k  = float(parts[1])
             sell_pe_k = float(parts[2])
@@ -248,7 +238,7 @@ class BacktestEngine:
         except (IndexError, ValueError):
             return None
 
-        def get_p(strike, opt_type):
+        def get_p(strike: float, opt_type: str) -> Optional[float]:
             sub = day[(day["SYMBOL"].str.strip().str.upper() == sym) &
                       (day["STRIKE_PR"] == strike) &
                       (day["OPTION_TYP"].str.upper() == opt_type)]
@@ -262,46 +252,35 @@ class BacktestEngine:
 
         if any(x is None for x in [sc, bc, sp, bp]):
             return None
-        return (sc - bc) + (sp - bp)  # net credit received
+        return (sc - bc) + (sp - bp)  # current net credit value (decreases as options decay)
 
-    def _next_date(self, dt: pd.Timestamp):
+    def _next_date(self, dt: pd.Timestamp) -> Optional[pd.Timestamp]:
         for d in self.trading_dates:
             if d > dt:
                 return d
         return None
 
 
-# ── Walk-forward split ────────────────────────────────────────────────────────
+# ── Walk-forward split ─────────────────────────────────────────────────────────
 
-def in_sample_out_sample_split(df, in_sample_ratio=0.70):
+def in_sample_out_sample_split(
+    df: pd.DataFrame,
+    in_sample_ratio: float = 0.70,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split Bhavcopy data 70% in-sample / 30% out-of-sample.
+    Strict chronological — no data leakage.
+    """
     dates     = sorted(df["DATE"].dropna().unique())
     split_idx = int(len(dates) * in_sample_ratio)
     split_dt  = dates[split_idx]
     in_df     = df[df["DATE"] <  split_dt].copy()
     out_df    = df[df["DATE"] >= split_dt].copy()
-    log.info("Split: in=%s→%s (%d days) | out=%s→%s (%d days)",
-        pd.Timestamp(dates[0]).date(), pd.Timestamp(dates[split_idx-1]).date(), split_idx,
-        pd.Timestamp(split_dt).date(), pd.Timestamp(dates[-1]).date(), len(dates)-split_idx)
-    return in_df, out_df
-            return None
-        return (sc - bc) + (sp - bp)
-
-    def _next_date(self, dt: pd.Timestamp):
-        for d in self.trading_dates:
-            if d > dt:
-                return d
-        return None
-
-
-# ── Walk-forward split ────────────────────────────────────────────────────────
-
-def in_sample_out_sample_split(df, in_sample_ratio=0.70):
-    dates     = sorted(df["DATE"].dropna().unique())
-    split_idx = int(len(dates) * in_sample_ratio)
-    split_dt  = dates[split_idx]
-    in_df     = df[df["DATE"] <  split_dt].copy()
-    out_df    = df[df["DATE"] >= split_dt].copy()
-    log.info("Split: in=%s->%s (%d days) | out=%s->%s (%d days)",
-        pd.Timestamp(dates[0]).date(), pd.Timestamp(dates[split_idx-1]).date(), split_idx,
-        pd.Timestamp(split_dt).date(), pd.Timestamp(dates[-1]).date(), len(dates)-split_idx)
+    log.info(
+        "Split: in=%s→%s (%d days) | out=%s→%s (%d days)",
+        pd.Timestamp(dates[0]).date(),
+        pd.Timestamp(dates[split_idx - 1]).date(), split_idx,
+        pd.Timestamp(split_dt).date(),
+        pd.Timestamp(dates[-1]).date(), len(dates) - split_idx,
+    )
     return in_df, out_df

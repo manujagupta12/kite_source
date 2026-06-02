@@ -45,7 +45,7 @@ HEADERS = {
 }
 
 # ── Instruments to track ──────────────────────────────────────────────────────
-FO_INDEX_SYMBOLS  = {"NIFTY", "BANKNIFTY", "FINNIFTY"}
+FO_INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY"}
 
 # Top 30 NIFTY50 stocks for equity backtest (high liquidity)
 EQUITY_SYMBOLS = {
@@ -58,17 +58,15 @@ EQUITY_SYMBOLS = {
 }
 
 # ── Column normalisation maps ─────────────────────────────────────────────────
-# F&O new format → standard
 _FO_NEW_MAP = {
     "TCKRSYMB": "SYMBOL",   "XPRYDT": "EXPIRY_DT",
-    "STRKPRIC": "STRIKE_PR","OPTNTP": "OPTION_TYP",
-    "OPNPRIC": "OPEN",      "HGHPRIC": "HIGH",
-    "LWPRIC": "LOW",        "CLSPRIC": "CLOSE",
-    "STTLMPRIC": "SETTLE_PR","TTLTRADGVOL": "CONTRACTS",
-    "OPNINTRST": "OPEN_INT","CHGINNOPNINTRST": "CHG_IN_OI",
+    "STRKPRIC": "STRIKE_PR", "OPTNTP": "OPTION_TYP",
+    "OPNPRIC": "OPEN",       "HGHPRIC": "HIGH",
+    "LWPRIC": "LOW",         "CLSPRIC": "CLOSE",
+    "STTLMPRIC": "SETTLE_PR", "TTLTRADGVOL": "CONTRACTS",
+    "OPNINTRST": "OPEN_INT", "CHGINNOPNINTRST": "CHG_IN_OI",
     "FININSTRMNTP": "INSTRUMENT", "FININSTRMTP": "INSTRUMENT",
 }
-# F&O old format already has standard names
 _FO_OLD_MAP = {
     "SYMBOL": "SYMBOL", "EXPIRY_DT": "EXPIRY_DT",
     "STRIKE_PR": "STRIKE_PR", "OPTION_TYP": "OPTION_TYP",
@@ -77,7 +75,6 @@ _FO_OLD_MAP = {
     "CONTRACTS": "CONTRACTS", "OPEN_INT": "OPEN_INT",
     "CHG_IN_OI": "CHG_IN_OI", "INSTRUMENT": "INSTRUMENT",
 }
-# Equity Bhavcopy columns
 _EQ_MAP = {
     "SYMBOL": "SYMBOL", "SERIES": "SERIES",
     "OPEN": "OPEN", "HIGH": "HIGH",
@@ -86,22 +83,22 @@ _EQ_MAP = {
     "TOTTRDQTY": "VOLUME", "TOTTRDVAL": "TURNOVER",
 }
 
-_FO_KEEP = {"SYMBOL","EXPIRY_DT","STRIKE_PR","OPTION_TYP",
-            "OPEN","HIGH","LOW","CLOSE","SETTLE_PR",
-            "OPEN_INT","CHG_IN_OI","DATE"}
+_FO_KEEP = {"SYMBOL", "EXPIRY_DT", "STRIKE_PR", "OPTION_TYP",
+            "OPEN", "HIGH", "LOW", "CLOSE", "SETTLE_PR",
+            "OPEN_INT", "CHG_IN_OI", "DATE"}
 
-_EQ_KEEP = {"SYMBOL","SERIES","OPEN","HIGH","LOW","CLOSE","VOLUME","DATE"}
+_EQ_KEEP = {"SYMBOL", "SERIES", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "DATE"}
 
-_NUMERIC_FO  = ["STRIKE_PR","OPEN","HIGH","LOW","CLOSE","SETTLE_PR","OPEN_INT","CHG_IN_OI"]
-_NUMERIC_EQ  = ["OPEN","HIGH","LOW","CLOSE","VOLUME"]
+_NUMERIC_FO = ["STRIKE_PR", "OPEN", "HIGH", "LOW", "CLOSE", "SETTLE_PR", "OPEN_INT", "CHG_IN_OI"]
+_NUMERIC_EQ = ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]
 
-# ── Lot sizes (as of 2024 — NSE revises periodically) ────────────────────────
+# ── Lot sizes (NSE official, 2024) ────────────────────────────────────────────
 LOT_SIZES = {
     "NIFTY":     50,
     "BANKNIFTY": 15,
     "FINNIFTY":  40,
 }
-EQUITY_LOT = 1  # shares (position sizing done via capital)
+EQUITY_LOT = 1  # shares (position sizing done via capital in run_backtest.py)
 
 
 def _session() -> requests.Session:
@@ -140,10 +137,9 @@ def _get(session: requests.Session, url: str, timeout: int = 25):
 def _normalise_fo(raw: pd.DataFrame, dt: date, fmt: str) -> pd.DataFrame:
     """Normalise F&O DataFrame columns, filter to index options only."""
     raw.columns = [c.strip().upper() for c in raw.columns]
-    col_map = _FO_NEW_MAP if fmt == "new" else _FO_OLD_MAP
+    col_map     = _FO_NEW_MAP if fmt == "new" else _FO_OLD_MAP
     raw.rename(columns={k: v for k, v in col_map.items() if k in raw.columns}, inplace=True)
 
-    # Guess SYMBOL column if still missing
     if "SYMBOL" not in raw.columns:
         cands = [c for c in raw.columns if "SYMB" in c or "TICK" in c]
         if cands:
@@ -153,10 +149,7 @@ def _normalise_fo(raw: pd.DataFrame, dt: date, fmt: str) -> pd.DataFrame:
         log.error("F&O: SYMBOL column not found. Columns: %s", raw.columns.tolist())
         return pd.DataFrame()
 
-    # Filter to index options only
     raw = raw[raw["SYMBOL"].str.strip().str.upper().isin(FO_INDEX_SYMBOLS)].copy()
-
-    # Keep only needed columns
     raw = raw[[c for c in raw.columns if c in _FO_KEEP]].copy()
 
     for col in _NUMERIC_FO:
@@ -187,11 +180,9 @@ def fetch_fo_bhavcopy(dt: date, session: requests.Session, out_dir: Path):
             df["EXPIRY_DT"] = pd.to_datetime(df["EXPIRY_DT"], errors="coerce")
         return df if not df.empty else None
 
-    # Try new format first (2023+), then old format
     urls = []
     if dt >= date(2023, 1, 1):
         urls.append((FO_NEW.replace("{YYYYMMDD}", dt.strftime("%Y%m%d")), "new"))
-    # Always try old format as fallback
     urls.append((FO_OLD.replace("{DDMMYYYY}", dt.strftime("%d%m%Y")), "old"))
 
     for url, fmt in urls:
@@ -228,7 +219,6 @@ def _normalise_eq(raw: pd.DataFrame, dt: date) -> pd.DataFrame:
     if "SYMBOL" not in raw.columns:
         return pd.DataFrame()
 
-    # Keep only EQ series (not BE, BL, etc.) and target symbols
     if "SERIES" in raw.columns:
         raw = raw[raw["SERIES"].str.strip().str.upper() == "EQ"].copy()
 
@@ -262,7 +252,6 @@ def fetch_eq_bhavcopy(dt: date, session: requests.Session, out_dir: Path):
         if resp is None:
             continue
         try:
-            # Equity Bhavcopy is a plain CSV (not zipped)
             raw = pd.read_csv(io.StringIO(resp.text), dtype=str)
         except Exception:
             continue
@@ -296,9 +285,9 @@ def load_range(
     (out_dir / "fo").mkdir(parents=True, exist_ok=True)
     (out_dir / "eq").mkdir(parents=True, exist_ok=True)
 
-    session  = _session()
+    session   = _session()
     fo_frames, eq_frames = [], []
-    days = list(_trading_days(start, end))
+    days      = list(_trading_days(start, end))
 
     log.info("Loading %d trading days: %s → %s", len(days), start, end)
 
@@ -342,7 +331,8 @@ def filter_options(df: pd.DataFrame) -> pd.DataFrame:
         return df
     return df[df["OPTION_TYP"].str.strip().str.upper().isin(["CE", "PE"])].copy()
 
-# Backwards-compatible alias (older run_backtest.py used this name)
+
+# Backwards-compatible alias
 filter_nifty_options = filter_options
 
 

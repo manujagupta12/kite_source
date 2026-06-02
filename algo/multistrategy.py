@@ -31,19 +31,14 @@ sys.path.insert(0, _ALGO_DIR)                          # algo/ folder (this scri
 sys.path.insert(1, r"C:\AlgoTrading\scripts")          # legacy path fallback
 try:
     import trade_logger as logger
-    _logger_ok = True
-except ImportError:
-    print("  [Logger] trade_logger.py not found — trade logging disabled")
-    _logger_ok = False
-
-    # ── Stub so script doesn't crash without logger ────────────
+except Exception:
     class _LoggerStub:
-        def load_today(self):          pass
-        def get_daily_pnl(self):       return 0.0, 0, 0
+        def load_today(self):             pass
+        def get_daily_pnl(self):          return 0.0, 0, 0
         def interactive_input(self, m=""): pass
-        def print_daily_summary(self): pass
+        def print_daily_summary(self):    pass
     logger = _LoggerStub()
-    sys.exit(1)
+    
 
 try:
     from regime_engine import (RegimeEngine, print_regime_report,

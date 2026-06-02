@@ -42,6 +42,13 @@ export default defineConfig({
               console.error('[WS Proxy Error]', err.message)
             }
           })
+          proxy.on('proxyReqWs', (proxyReq, req, socket) => {
+            socket.on('error', (err) => {
+              // Swallow socket-level write errors (tab close, browser sleep, refresh)
+              if (['ECONNABORTED','ECONNRESET','EPIPE'].includes(err.code)) return
+              console.error('[WS Socket Error]', err.message)
+            })
+          })
         },
       },
     },
