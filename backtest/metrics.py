@@ -98,24 +98,43 @@ def compute_metrics(trades: List[TradeResult], strategy_name: str, lot_value: fl
     gross_loss   = abs(losses["pnl"].sum()) * lot_value
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else (float("inf") if gross_profit > 0 else 0)
 
-    # Drawdown
-    cumulative = np.cumsum(pnls)
-    running_max = np.maximum.accumulate(cumulative)
-    drawdowns   = (running_max - cumulative) / (running_max + 1e-9) * 100
-    max_drawdown = float(drawdowns.max())
+    # Drawdown — works correctly for both long (BUY) and short (SELL) strategies
+    cumulative   = np.cumsum(pnls)
+    running_max  = np.maximum.accumulate(cumulative)
+    running_min  = np.minimum.accumulate(cumulative)
+    # For strategies that start negative (short premium sellers), anchor to 0
+    peak         = np.maximum(running_max, 0)
+    drawdowns    = np.where(
+        peak > 0,
+        (peak - cumulative) / (peak + 1e-9) * 100,
+        np.zeros_like(cumulative)
+    )
+    max_drawdown = float(np.clip(drawdowns.max(), 0, 10000))
 
     # Sharpe ratio (annualised, risk-free ≈ 6.5% for India)
     if len(pnls) >= 2:
-        daily_returns = pnls / (abs(df["entry_price"].mean()) * lot_value + 1e-9)
-        sharpe = (daily_returns.mean() - 0.065 / 252) / (daily_returns.std() + 1e-9) * np.sqrt(252)
+        # Use absolute entry price as capital proxy (works for both BUY and SELL)
+        capital_proxy = abs(df["entry_price"].mean()) * lot_value
+        if capital_proxy < 1:
+            capital_proxy = 1.0
+        daily_returns = pnls / capital_proxy
+        std_dev = daily_returns.std()
+        if std_dev < 1e-9:
+            sharpe = 0.0
+        else:
+            sharpe = float(np.clip(
+                (daily_returns.mean() - 0.065 / 252) / std_dev * np.sqrt(252),
+                -50, 50
+            ))
     else:
         sharpe = 0.0
 
-    # Calmar = annualised return / max drawdown
+    # Calmar = annualised return / max drawdown  (capped ±999 to prevent overflow)
     if len(df) >= 2:
         days_total = (df["date_out"].max() - df["date_in"].min()).days or 1
         ann_return = (pnls.sum() / days_total) * 252
-        calmar = ann_return / (max_drawdown / 100 + 1e-9)
+        dd_denom   = max(max_drawdown / 100, 0.001)   # min 0.1% denominator
+        calmar     = float(np.clip(ann_return / dd_denom, -999, 9999))
     else:
         calmar = 0.0
 
