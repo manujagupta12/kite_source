@@ -665,6 +665,13 @@ try:
 except ImportError:
     _TG_OK = False
 
+# ── Razorpay (lazy init) ──────────────────────────────────────────────────
+try:
+    from razorpay_handler import create_order as _rzp_create_order, verify_payment as _rzp_verify, activate_plan as _rzp_activate
+    _RZP_OK = True
+except ImportError:
+    _RZP_OK = False
+
 def _tg_send(signal: dict) -> None:
     if not _TG_OK: return
     try: _get_tg_bot().send_signal(signal)
@@ -1188,6 +1195,78 @@ def upgrade_plan(req:UpgradeRequest,user=Depends(get_current_user)):
     return {"message":f"Upgraded to {req.plan} ({req.billing})","plan":req.plan,
             "billing":req.billing,"price":price,"expiry":expiry,"tier":TIERS[req.plan]}
 
+# ── Razorpay Payment Flow ─────────────────────────────────────────────────
+class RazorpayOrderReq(BaseModel):
+    plan: str
+    billing: str = "monthly"
+
+class RazorpayVerifyReq(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+    plan: str
+    billing: str = "monthly"
+
+@app.post("/subscription/create-order")
+def razorpay_create_order(req: RazorpayOrderReq, user=Depends(get_current_user)):
+    """Step 1: Create a Razorpay order. Returns order_id + key_id for checkout."""
+    if not _RZP_OK:
+        raise HTTPException(503, "Razorpay handler not available")
+    try:
+        order = _rzp_create_order(req.plan, req.billing, user["email"])
+        return order
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Order creation failed: {e}")
+
+@app.post("/subscription/verify-payment")
+def razorpay_verify_payment(req: RazorpayVerifyReq, user=Depends(get_current_user)):
+    """Step 2: Verify Razorpay signature and activate plan."""
+    if not _RZP_OK:
+        raise HTTPException(503, "Razorpay handler not available")
+    rzp_key = os.environ.get("RAZORPAY_KEY_SECRET","").strip()
+    if rzp_key:
+        # Live mode: verify signature
+        ok = _rzp_verify(req.razorpay_order_id, req.razorpay_payment_id, req.razorpay_signature)
+        if not ok:
+            raise HTTPException(400, "Payment signature verification failed")
+    # Activate plan
+    u = _db["users"].get(user["email"], {})
+    updated = _rzp_activate(u, req.plan, req.billing)
+    _db["users"][user["email"]].update(updated)
+    return {"success": True, "plan": req.plan, "billing": req.billing,
+            "expiry": updated.get("plan_expiry"), "message": f"Plan activated: {req.plan} ({req.billing})"}
+
+@app.get("/subscription/razorpay-status")
+def razorpay_status():
+    """Check if Razorpay is configured (for frontend to show/hide payment UI)."""
+    key_id = os.environ.get("RAZORPAY_KEY_ID","").strip()
+    return {
+        "configured": bool(key_id),
+        "test_mode": key_id.startswith("rzp_test_") if key_id else True,
+        "key_id": key_id if key_id else None,
+    }
+
+# ── Telegram Status & Test ────────────────────────────────────────────────
+@app.get("/telegram/status")
+def telegram_status():
+    token = os.environ.get("TELEGRAM_BOT_TOKEN","").strip()
+    chat  = os.environ.get("TELEGRAM_CHAT_ID","").strip()
+    return {"configured": bool(token and chat), "has_token": bool(token), "has_chat_id": bool(chat)}
+
+@app.post("/telegram/test")
+def telegram_test(user=Depends(get_current_user)):
+    if not _TG_OK:
+        raise HTTPException(503, "Telegram module not loaded")
+    bot = _get_tg_bot()
+    if not bot._enabled:
+        raise HTTPException(400, "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env, then restart backend")
+    ok = bot.test_connection()
+    if ok:
+        return {"success": True, "message": "Test message sent to Telegram ✅"}
+    raise HTTPException(500, "Failed to send message — check token and chat_id")
+
 # ── Analytics ─────────────────────────────────────────────────────────────
 @app.get("/analytics/pnl")
 def analytics_pnl(user=Depends(get_current_user)):
@@ -1468,14 +1547,11 @@ def broker_status(user=Depends(get_optional_user)):
         return {"ok": False, "broker": "none", "message": "broker.py not loaded"}
     b = _get_broker()
     btype = b.__class__.__name__.replace("Broker", "").lower()
-    upstox_configured = bool(os.environ.get("UPSTOX_API_KEY"))
-    upstox_authed     = bool(os.environ.get("UPSTOX_ACCESS_TOKEN"))
     return {
         "ok": b.is_ready, "broker": btype, "paper": btype == "paper",
-        "available": {"dhan":   bool(os.environ.get("DHAN_ACCESS_TOKEN")),
-                      "kite":   bool(os.environ.get("KITE_ACCESS_TOKEN")),
-                      "upstox": upstox_authed},
-        "upstox_needs_auth": upstox_configured and not upstox_authed,
+        "available": {"dhan": bool(os.environ.get("DHAN_ACCESS_TOKEN")),
+                      "kite": bool(os.environ.get("KITE_ACCESS_TOKEN"))},
+        "upstox_needs_auth": False,  # Upstox disabled
     }
 
 @app.get("/broker/funds")
@@ -1494,7 +1570,9 @@ def broker_orders_list(user=Depends(get_current_user)):
     return {"orders": _get_broker().get_orders()}
 
 @app.get("/broker/upstox-auth")
-def upstox_auth_redirect():
+def upstox_auth_redirect():  # Upstox disabled — not in use
+    raise HTTPException(410, "Upstox integration is not enabled on this platform")
+async def _upstox_auth_redirect_disabled():
     """Step 1: Open this URL in browser to authenticate Upstox."""
     if not _BROKER_OK:
         raise HTTPException(503, "broker.py not loaded")
