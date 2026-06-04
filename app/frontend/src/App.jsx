@@ -856,10 +856,9 @@ function BrokerTab({userPlan}){
   };
 
   const BROKERS=[
-    {id:"dhan",   name:"Dhan",    desc:"Your primary broker",         docsUrl:"https://web.dhan.co",         envKey:"DHAN_ACCESS_TOKEN",    color:"#FF6B00"},
-    {id:"kite",   name:"Kite",    desc:"Zerodha Kite Connect",        docsUrl:"https://kite.trade/connect",  envKey:"KITE_ACCESS_TOKEN",    color:"#387ED1"},
-    {id:"upstox", name:"Upstox",  desc:"Free API, popular with youth",docsUrl:"http://localhost:8000/broker/upstox-auth", envKey:"UPSTOX_ACCESS_TOKEN", color:"#6B48FF"},
-    {id:"paper",  name:"Paper",   desc:"Simulated — no real orders",  docsUrl:null,                          envKey:null,                   color:"#9E9E9E"},
+    {id:"dhan",  name:"Dhan",  desc:"Your primary broker",        docsUrl:"https://web.dhan.co",        envKey:"DHAN_ACCESS_TOKEN", color:"#FF6B00"},
+    {id:"kite",  name:"Kite",  desc:"Zerodha Kite Connect",       docsUrl:"https://kite.trade/connect", envKey:"KITE_ACCESS_TOKEN", color:"#387ED1"},
+    {id:"paper", name:"Paper", desc:"Simulated — no real orders", docsUrl:null,                         envKey:null,                color:"#9E9E9E"},
   ];
 
   const active=status?.broker||"none";
@@ -878,13 +877,7 @@ function BrokerTab({userPlan}){
           {status.ok?`● ${active.toUpperCase()} ACTIVE`:"● NO BROKER"}
         </span>}
       </div>
-      {status?.upstox_needs_auth&&<div style={{background:"rgba(107,72,255,.08)",border:"1px solid rgba(107,72,255,.25)",borderRadius:7,padding:"8px 12px",fontSize:10,color:"#A78BFA",marginBottom:10}}>
-        ⚡ Upstox API key found but not authenticated.{" "}
-        <a href="http://localhost:8000/broker/upstox-auth" target="_blank" rel="noreferrer"
-           style={{color:"#A78BFA",fontWeight:700,textDecoration:"underline"}}>
-          Click here to connect Upstox →
-        </a>
-      </div>}
+      {/* Upstox banner removed — not in use */}
       {!isPaid&&<div style={{background:"rgba(245,197,24,.06)",border:"1px solid rgba(245,197,24,.2)",borderRadius:7,padding:"7px 11px",fontSize:10,color:"var(--yel)"}}>
         ⚠ Live order placement requires Weekly plan or above. Broker status visible on all plans.
       </div>}
@@ -922,11 +915,7 @@ function BrokerTab({userPlan}){
               onClick={()=>switchBroker(b.id)} disabled={!!switching}>
               {isSwitching?"Switching…":"Use this"}
             </button>}
-            {b.id==="upstox"&&!isAvail&&b.docsUrl&&<a href={b.docsUrl} target="_blank" rel="noreferrer"
-              className="btn btn-ghost btn-sm" style={{fontSize:9,textDecoration:"none",flex:1,textAlign:"center",display:"block",padding:"5px 0"}}>
-              Connect →
-            </a>}
-            {b.id!=="upstox"&&!isAvail&&b.docsUrl&&<a href={b.docsUrl} target="_blank" rel="noreferrer"
+            {!isAvail&&b.docsUrl&&<a href={b.docsUrl} target="_blank" rel="noreferrer"
               className="btn btn-ghost btn-sm" style={{fontSize:9,textDecoration:"none",flex:1,textAlign:"center",display:"block",padding:"5px 0"}}>
               Get token →
             </a>}
@@ -940,11 +929,10 @@ function BrokerTab({userPlan}){
     <div style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:10,padding:"14px 16px"}}>
       <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",fontWeight:700,marginBottom:10,letterSpacing:"1px"}}>SETUP GUIDE</div>
       {[
-        ["Dhan (recommended)",   "Add DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN to .env → restart",       "#FF6B00"],
-        ["Zerodha Kite",         "Add KITE_API_KEY + KITE_ACCESS_TOKEN to .env → restart",          "#387ED1"],
-        ["Upstox",               "Add UPSTOX_API_KEY + UPSTOX_API_SECRET to .env → restart → visit /broker/upstox-auth", "#6B48FF"],
-        ["Broker priority",      "Auto-selects: Dhan first, then Kite, then Upstox, then Paper",    "#9E9E9E"],
-        ["Force broker",         "Set BROKER=dhan (or kite / upstox / paper) in .env",              "#00d4ff"],
+        ["Dhan (recommended)", "Add DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN to .env → restart",      "#FF6B00"],
+        ["Zerodha Kite",       "Add KITE_API_KEY + KITE_ACCESS_TOKEN to .env → restart",           "#387ED1"],
+        ["Broker priority",    "Auto-selects: Dhan first, then Kite, then Paper",                   "#9E9E9E"],
+        ["Force broker",       "Set BROKER=dhan (or kite / paper) in .env",                         "#00d4ff"],
       ].map(([k,v,c])=>(<div key={k} style={{display:"flex",gap:10,marginBottom:7,fontSize:10}}>
         <div style={{fontFamily:"var(--mono)",color:c,minWidth:130,fontSize:9,flexShrink:0,paddingTop:2}}>{k}</div>
         <div style={{color:"var(--muted)",lineHeight:1.5}}>{v}</div>
@@ -1105,11 +1093,135 @@ function MarginTab(){
   </div>);
 }
 
+function TelegramSettingsPanel(){
+  const [status,setStatus]=useState(null);
+  const [testing,setTesting]=useState(false);
+  const [msg,setMsg]=useState("");
+
+  useEffect(()=>{api("/telegram/status").then(setStatus).catch(()=>{});},[]);
+
+  const test=async()=>{
+    setTesting(true);setMsg("");
+    try{
+      const r=await api("/telegram/test",{method:"POST"});
+      setMsg(r.success?"✅ Test message sent to Telegram! Check your chat.":r.detail||"Failed");
+    }catch(e){
+      const err=e.message||"";
+      if(err.includes("400")||err.includes("not set")){
+        setMsg("⚠ Set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env, then restart backend");
+      }else{
+        setMsg("✗ "+err);
+      }
+    }finally{setTesting(false);}
+  };
+
+  const ok=status?.configured;
+  return(
+    <div style={{background:"var(--s1)",border:`1px solid ${ok?"rgba(0,212,255,.25)":"rgba(255,61,90,.2)"}`,borderRadius:12,padding:"16px 18px",marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+        <span style={{fontSize:20}}>✈️</span>
+        <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--acc)"}}>TELEGRAM SIGNAL BOT</div>
+        <span style={{fontSize:9,fontFamily:"var(--mono)",padding:"2px 8px",borderRadius:10,
+          background:ok?"rgba(0,255,157,.1)":"rgba(255,61,90,.1)",
+          color:ok?"var(--grn)":"var(--red)",
+          border:`1px solid ${ok?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`}}>
+          {ok?"● ACTIVE":"● NOT CONFIGURED"}
+        </span>
+      </div>
+
+      {!ok&&<div style={{background:"rgba(255,197,24,.06)",border:"1px solid rgba(255,197,24,.2)",borderRadius:8,padding:"12px 14px",marginBottom:12}}>
+        <div style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--yel)",fontWeight:700,marginBottom:8}}>SETUP IN 3 STEPS</div>
+        {[
+          ["1","Message @BotFather on Telegram → /newbot → copy the API token"],
+          ["2","Add your bot to your channel/group as admin, then message @userinfobot to get chat ID"],
+          ["3","Add to .env: TELEGRAM_BOT_TOKEN=xxx and TELEGRAM_CHAT_ID=-100xxx → restart backend"],
+        ].map(([n,t])=>(
+          <div key={n} style={{display:"flex",gap:10,marginBottom:7}}>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--acc)",minWidth:16}}>{n}.</div>
+            <div style={{fontSize:10,color:"var(--muted)",lineHeight:1.5}}>{t}</div>
+          </div>
+        ))}
+      </div>}
+
+      {ok&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+        {[
+          ["Token",status?.has_token?"✓ Configured":"✗ Missing","var(--grn)"],
+          ["Chat ID",status?.has_chat_id?"✓ Configured":"✗ Missing","var(--grn)"],
+        ].map(([k,v,c])=>(
+          <div key={k} style={{background:"var(--s2)",borderRadius:7,padding:"8px 12px"}}>
+            <div style={{fontSize:8,color:"var(--muted)",letterSpacing:"1px",marginBottom:4}}>{k}</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:c}}>{v}</div>
+          </div>
+        ))}
+      </div>}
+
+      {msg&&<div style={{fontSize:11,padding:"7px 11px",borderRadius:7,marginBottom:10,
+        background:msg.startsWith("✅")?"rgba(0,255,157,.08)":"rgba(255,197,24,.06)",
+        color:msg.startsWith("✅")?"var(--grn)":"var(--yel)",
+        border:`1px solid ${msg.startsWith("✅")?"rgba(0,255,157,.2)":"rgba(255,197,24,.2)"}`}}>
+        {msg}
+      </div>}
+
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button className="btn btn-primary" style={{fontSize:10}} onClick={test} disabled={testing}>
+          {testing?"Sending…":"📨 Send Test Message"}
+        </button>
+        <div style={{fontSize:9,color:"var(--muted)",alignSelf:"center"}}>
+          Signals with score ≥ 75 are auto-posted when bot is active.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SubscriptionTab({user}){
   const [plans,setPlans]=useState([]);const [status,setStatus]=useState(null);
   const [billing,setBilling]=useState("monthly");const [loading,setLoading]=useState("");const [msg,setMsg]=useState("");
   useEffect(()=>{api("/subscription/plans").then(d=>setPlans(d.plans||[])).catch(()=>{});api("/subscription/status").then(d=>{setStatus(d);if(d.billing)setBilling(d.billing);}).catch(()=>{});},[]);
-  const upgrade=async(planId)=>{setLoading(planId);setMsg("");try{const r=await api("/subscription/upgrade",{method:"POST",body:JSON.stringify({plan:planId,billing})});if(r.plan){setMsg(`✓ ${r.plan} (${r.billing}) ₹${r.price}`);api("/subscription/status").then(setStatus);}else setMsg(r.detail||"Upgrade failed");}catch(e){setMsg("Error: "+e.message);}finally{setLoading("");}}
+  const upgrade=async(planId)=>{
+    setLoading(planId);setMsg("");
+    try{
+      // Step 1: Check if Razorpay is configured
+      const rzpStatus=await api("/subscription/razorpay-status").catch(()=>({configured:false}));
+      if(!rzpStatus.configured||rzpStatus.key_id==="rzp_test_mock"||!rzpStatus.key_id){
+        // No Razorpay key — admin/dev direct upgrade
+        const r=await api("/subscription/upgrade",{method:"POST",body:JSON.stringify({plan:planId,billing})});
+        if(r.plan){setMsg(`✓ ${r.plan} (${r.billing}) activated`);api("/subscription/status").then(setStatus);}
+        else setMsg(r.detail||"Upgrade failed");
+        return;
+      }
+      // Step 2: Create Razorpay order
+      const order=await api("/subscription/create-order",{method:"POST",body:JSON.stringify({plan:planId,billing})});
+      if(!order.order_id){setMsg("Could not create payment order");return;}
+      // Step 3: Open Razorpay checkout
+      if(!window.Razorpay){
+        const s=document.createElement("script");s.src="https://checkout.razorpay.com/v1/checkout.js";
+        document.head.appendChild(s);await new Promise(r=>s.onload=r);
+      }
+      await new Promise((resolve,reject)=>{
+        const rzp=new window.Razorpay({
+          key:order.key_id,amount:order.amount,currency:order.currency||"INR",
+          order_id:order.order_id,name:"AlgoTrade",description:`${planId} plan (${billing})`,
+          theme:{color:"#00d4ff"},
+          handler:async(response)=>{
+            try{
+              const v=await api("/subscription/verify-payment",{method:"POST",body:JSON.stringify({
+                razorpay_order_id:response.razorpay_order_id,
+                razorpay_payment_id:response.razorpay_payment_id,
+                razorpay_signature:response.razorpay_signature,
+                plan:planId,billing
+              })});
+              if(v.success){setMsg(`✓ Payment successful! ${planId} (${billing}) activated`);api("/subscription/status").then(setStatus);}
+              else setMsg(v.detail||"Payment verification failed");
+            }catch(e){setMsg("Verification error: "+e.message);}
+            resolve();
+          },
+          modal:{ondismiss:()=>{setMsg("Payment cancelled");resolve();}},
+        });
+        rzp.open();
+      });
+    }catch(e){setMsg("Error: "+e.message);}finally{setLoading("");}
+  };
   const currentPlan=status?.plan||user?.plan||"free";const currentBilling=status?.billing||"monthly";
   const BADGE_COL={free:"#5a7a9a",weekly:"#00d4ff",monthly:"#00ff9d",annual:"#f5c518"};
   const getPrice=planId=>{const pp=PLAN_PRICES[planId];if(!pp)return null;const p=pp[billing];return p===undefined?null:p;};
@@ -1481,7 +1593,7 @@ function App(){
           {tab==="analytics"&&<AnalyticsTab/>}
           {tab==="paper"&&<PaperTab/>}
           {tab==="margin"&&<MarginTab/>}
-          {tab==="broker"&&<BrokerTab userPlan={user?.plan||"free"}/>}
+          {tab==="broker"&&<div><TelegramSettingsPanel/><BrokerTab userPlan={user?.plan||"free"}/></div>}
           {tab==="why"&&<StrategyTrustPanel/>}
           {tab==="subscription"&&<SubscriptionTab user={user}/>}
         </div>
