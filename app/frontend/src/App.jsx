@@ -306,7 +306,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--body)}
 .billing-toggle{display:flex;gap:4px;background:var(--s2);border:1px solid var(--br);border-radius:8px;padding:3px;margin-bottom:18px;width:fit-content}
 .billing-tab{padding:5px 16px;border-radius:6px;font-size:11px;font-family:var(--mono);cursor:pointer;color:var(--muted);transition:all .12s}
 .billing-tab.act{background:var(--acc);color:#000;font-weight:700}
-.plans-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.plans-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:20px}
 .plan-card{background:var(--s1);border:1px solid var(--br);border-radius:12px;padding:18px;position:relative;transition:border-color .15s}
 .plan-card.current{border-color:rgba(0,212,255,.4);background:rgba(0,212,255,.04)}
 .plan-badge{font-size:8px;font-family:var(--mono);font-weight:700;padding:2px 7px;border-radius:3px;position:absolute;top:11px;right:11px;letter-spacing:.8px}
@@ -328,6 +328,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--body)}
 .mob-nav-it{display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;padding:6px 10px;border-radius:8px;transition:all .12s;color:var(--muted);min-width:44px}
 .mob-nav-it.act{color:var(--acc)}
 .mob-nav-ico{font-size:16px;line-height:1}.mob-nav-lbl{font-size:9px;letter-spacing:.3px}
+@keyframes slideIn{from{opacity:0;transform:translateY(-18px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.sig-toast{position:fixed;top:14px;right:18px;z-index:999;background:var(--s1);border:1px solid rgba(0,255,157,.35);border-left:3px solid var(--grn);border-radius:9px;padding:9px 15px;font-family:var(--mono);font-size:10px;color:var(--grn);display:flex;align-items:center;gap:8px;box-shadow:0 8px 30px rgba(0,0,0,.5);animation:slideIn .25s ease-out}
+.sig-toast::before{content:'◈';font-size:11px;animation:pulse 1s infinite}
 @media(max-width:900px){.sidebar{display:none}.mob-nav{display:flex}.app{padding-bottom:var(--mob-nav-h)}.content{padding:10px}.sigs-grid{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}.idx-strip{grid-template-columns:repeat(2,1fr)}.movers-grid{grid-template-columns:1fr}.plans-grid{grid-template-columns:repeat(2,1fr)}.topbar{padding:0 10px;gap:6px}.src-pill{display:none}}
 @media(max-width:600px){.stats-grid{grid-template-columns:repeat(2,1fr);gap:6px}.plans-grid{grid-template-columns:1fr 1fr}.form-row{grid-template-columns:1fr}.billing-toggle{width:100%}.billing-tab{flex:1;text-align:center}.tl-row{grid-template-columns:0.5fr 1fr 0.7fr 0.5fr auto}.topbar-right .badge:not(:last-child){display:none}}
 @media(min-width:1400px){.sigs-grid{grid-template-columns:repeat(3,1fr)}}
@@ -664,7 +667,13 @@ function SignalsTab({signals,market,strategy,indices,onClearStrategy,pcrHistory,
       <span>⏰</span><span>{isAfterMarketClose()?"MARKET CLOSED — signals shown are from today's session":"PRE-MARKET — live signals begin at 9:15 AM IST"}</span>
     </div>}{(market!=="ALL"||strategy)&&(<div className="filter-crumb">{market!=="ALL"&&<span style={{color:mktObj?.color||"var(--acc)"}}>{mktObj?.label||market}</span>}{market!=="ALL"&&strategy&&<span style={{color:"var(--dim)"}}>›</span>}{strategy&&<span style={{color:STRAT_INFO[skey(strategy)]?.color||"var(--acc)"}}>{strategy}</span>}<span style={{color:"var(--muted)",fontSize:9}}>&nbsp;— {filtered.length} signal{filtered.length!==1?"s":""}</span>{strategy&&<span className="filter-crumb-clear" onClick={onClearStrategy}>× Clear</span>}
       {expiredCount>0&&<span style={{cursor:"pointer",fontSize:8,color:showExpired?"var(--red)":"var(--dim)",fontFamily:"var(--mono)",marginLeft:"auto",padding:"1px 6px",borderRadius:4,border:"1px solid rgba(255,61,90,.2)",background:"rgba(255,61,90,.05)"}} onClick={()=>setShowExpired(v=>!v)}>{showExpired?`Hide ${expiredCount} expired`:`+${expiredCount} expired`}</span>}
-    </div>)}{filtered.length>0?(<div className="sigs-grid">{filtered.map((s,i)=><SigCard key={s.id||`${s.timestamp}-${i}`} sig={s} pcrHistory={pcrHistory} onLogTrade={onLogTrade} onPlaceOrder={onPlaceOrder} userPlan={userPlan}/>)}</div>):(<div className="empty"><div className="empty-ico">📊</div><div className="empty-t">No signals for this filter</div><div className="empty-s">{market!=="ALL"?`${market}${strategy?" • "+strategy:""} — 9:15–15:30`:"Backend pushes every 5s"}</div></div>)}</div>);}
+    </div>)}{filtered.length>0?(<div className="sigs-grid">{filtered.map((s,i)=><SigCard key={s.id||`${s.timestamp}-${i}`} sig={s} pcrHistory={pcrHistory} onLogTrade={onLogTrade} onPlaceOrder={onPlaceOrder} userPlan={userPlan}/>)}</div>):(<div className="empty">
+  <div className="empty-ico">{isMarketOpen()?"📡":"🌙"}</div>
+  <div className="empty-t">{isMarketOpen()?"Waiting for signals…":"Market is closed"}</div>
+  <div className="empty-s" style={{marginBottom:8}}>{isMarketOpen()?`${market!=="ALL"?market+" · ":""}Backend refreshes every 5s`:isAfterMarketClose()?"Next session Mon–Fri at 9:15 AM IST":"Pre-market · Live signals start at 9:15 AM IST"}</div>
+  {!isMarketOpen()&&<div style={{fontSize:9,fontFamily:"var(--mono)",color:"var(--acc)",padding:"5px 14px",background:"rgba(0,212,255,.05)",border:"1px solid rgba(0,212,255,.12)",borderRadius:6,display:"inline-block"}}>Historical signals visible above · New signals after open</div>}
+  {isMarketOpen()&&market!=="ALL"&&<div style={{fontSize:9,color:"var(--muted)"}}>Try selecting "All" in the sidebar to see all instruments</div>}
+</div>)}</div>);}
 
 function TraderLoggerTab(){
   const [data,setData]=useState(null);
@@ -1472,8 +1481,19 @@ function App(){
 
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),100);return()=>clearInterval(t);},[]);
 
+  const [newSigToast,setNewSigToast]=useState(null);
   const addSignals=useCallback((incoming)=>{
-    setSigs(prev=>mergeSignals(prev,Array.isArray(incoming)?incoming:[incoming]));
+    const arr=Array.isArray(incoming)?incoming:[incoming];
+    setSigs(prev=>{
+      const before=prev.length;
+      const next=mergeSignals(prev,arr);
+      if(next.length>before&&arr[0]){
+        const s=arr[0];
+        setNewSigToast({id:Date.now(),text:`${s.direction||"NEW"} · ${s.instrument||s.symbol||s.market||"SIGNAL"} · Score ${s.score||"—"}`});
+        setTimeout(()=>setNewSigToast(null),4000);
+      }
+      return next;
+    });
   },[]);
 
   const addPcrHistory=useCallback((sig)=>{
@@ -1544,14 +1564,15 @@ function App(){
   const toggleDropdown=m=>{setOpenMkt(prev=>prev===m?null:m);};
   const selectStrategy=s=>{setStratP(prev=>prev===s?null:s);setTabP("signals");};
   const TABS=[{id:"signals",lbl:`Signals (${signals.length})`},{id:"tradelog",lbl:"Trade Log"},{id:"paper",lbl:"Paper"},{id:"analytics",lbl:"Analytics"},{id:"why",lbl:"💡 Why It Works"},{id:"subscription",lbl:"Plans"}];
-  const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"tradelog",ico:"📝",lbl:"Log"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"margin",ico:"₹",lbl:"Margin"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"subscription",ico:"★",lbl:"Plans"}];
+  const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"subscription",ico:"★",lbl:"Plans"}];
 
   return(<><style>{CSS}</style>
     {logModal&&<LogTradeModal sig={logModal} onClose={()=>setLogModal(null)} onLogged={()=>{setLogModal(null);setTabP("tradelog");}}/>}
     {placeModal&&<PlaceOrderModal sig={placeModal} userPlan={user?.plan||"free"} onClose={()=>setPlaceModal(null)}/>}
+    {newSigToast&&<div key={newSigToast.id} className="sig-toast">NEW SIGNAL · {newSigToast.text}</div>}
     <div className="app">
       <aside className="sidebar">
-        <div className="sb-logo"><div className="logo-t">ALGOTRADE</div><div className="logo-s">NSE SIGNAL PLATFORM v1.0.0</div></div>
+        <div className="sb-logo"><div className="logo-t">ALGOTRADE</div><div className="logo-s">NSE F&amp;O SIGNAL PLATFORM v3.0</div></div>
         <nav className="sb-nav">
           <div className="nav-sect">Navigate</div>
           {[{id:"signals",ico:"◈",lbl:"Live Signals"},{id:"tradelog",ico:"📝",lbl:"Trade Logger"},{id:"paper",ico:"📄",lbl:"Paper Trade"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"margin",ico:"₹",lbl:"Margin Setup"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"why",ico:"💡",lbl:"Why It Works"},{id:"subscription",ico:"★",lbl:"Subscription"}].map(n=>(
@@ -1561,9 +1582,10 @@ function App(){
           {MARKETS.map(m=>{const cnt=m.id!=="ALL"?signals.filter(s=>matchesMarket(s,m.id)).length:0;return(<div key={m.id}><div className={`mkt-btn ${mkt===m.id?"act":""}`}><div className="mkt-label-area" onClick={()=>selectMarket(m.id)}><div className="mkt-badge" style={{background:m.color+"20",color:m.color}}>{m.icon}</div><span className="mkt-name" style={{color:mkt===m.id?m.color:undefined}}>{m.label}{m.id!=="ALL"&&cnt>0&&<span style={{marginLeft:4,fontSize:7,background:m.color+"20",color:m.color,padding:"1px 4px",borderRadius:3}}>{cnt}</span>}</span></div>{m.id!=="ALL"&&<div className="mkt-chev-btn" onClick={e=>{e.stopPropagation();toggleDropdown(m.id);}}><span className={`chev ${openMkt===m.id?"open":""}`}>▾</span></div>}</div>{openMkt===m.id&&m.strategies&&(<div className="strat-list">{m.strategies.map(s=>{const k=skey(s);const info=STRAT_INFO[k]||{color:m.color};const isAct=strat===s;const c=signals.filter(sg=>matchesMarket(sg,m.id)&&matchesStrategy(sg,s)).length;return(<div key={s} className={`strat-it ${isAct?"act":""}`} onClick={()=>selectStrategy(s)}><div className="s-dot" style={{background:isAct?info.color:"var(--br)"}}/><span style={{flex:1}}>{s}</span>{c>0&&<span style={{fontSize:7,fontFamily:"var(--mono)",color:info.color,background:info.color+"18",padding:"1px 4px",borderRadius:3}}>{c}</span>}<span style={{fontSize:7,color:info.color,fontFamily:"var(--mono)",marginLeft:2}}>{info.tag}</span></div>);})}</div>)}</div>);
           })}
           <div className="nav-sect">Data Sources</div>
-          <div className="feed-row feed-ok">◉ NSE Direct API</div>
-          <div className="feed-row" style={{color:"#22c55e"}}>◉ Dhan WebSocket</div>
-          <div className="feed-row" style={{color:"#22c55e"}}>◉ NSE OI / PCR</div>
+          <div className="feed-row" style={{color:nseLive?"var(--grn)":"var(--yel)"}}>{nseLive?"◉":"◌"} NSE Direct API{nseLive?"":" (connecting)"}</div>
+          <div className="feed-row" style={{color:dhanLive?"var(--grn)":"var(--dim)"}}>{dhanLive?"◉":"○"} Dhan WebSocket{dhanLive?"":" (off)"}</div>
+          <div className="feed-row" style={{color:pcrCount>0?"#22c55e":"var(--dim)"}}>{pcrCount>0?"◉":"○"} NSE OI / PCR{pcrCount>0?` (${pcrCount})`:""}</div>
+          <div className="feed-row" style={{color:wsStatus==="live"?"var(--grn)":wsStatus==="connecting"?"var(--yel)":"var(--red)"}}>{wsStatus==="live"?"◉":wsStatus==="connecting"?"◌":"◎"} WS {wsStatus.toUpperCase()}</div>
           <div style={{marginTop:"auto",padding:"10px 6px",borderTop:"1px solid var(--br)"}}>
             <div className="nav-it" onClick={()=>{localStorage.removeItem("tok");setUser(null);}}><span className="nav-ico">↩</span>Logout</div>
           </div>
@@ -1588,7 +1610,12 @@ function App(){
           {tab==="signals"&&signals.length>0&&(<div className="tab-right"><span className="count-pill" style={{background:"rgba(0,255,157,.08)",color:"var(--grn)"}}>▲{bull}</span><span className="count-pill" style={{background:"rgba(255,61,90,.08)",color:"var(--red)"}}>▼{bear}</span><span className="count-pill" style={{background:"rgba(0,212,255,.08)",color:"var(--acc)"}}>◆{neut}</span></div>)}
         </div>
         <div className="content">
-          {tab==="signals"&&<><div className="stats-grid" style={{marginBottom:12}}>{[{l:"Total",v:signals.length,c:"var(--acc)"},{l:"F&O",v:foCount,c:"var(--grn)"},{l:"PCR",v:pcrCount,c:"#22c55e"},{l:"Equity",v:signals.filter(s=>s.market==="EQUITY").length,c:"var(--pur)"}].map((s,i)=>(<div key={i} className="stat-card"><div className="stat-lbl">{s.l}</div><div className="stat-val" style={{color:s.c}}>{s.v}</div>{i===0&&<div className="stat-sub">{mkt!=="ALL"?mkt:"All"}{strat?" · "+strat:""}</div>}</div>))}</div><SignalsTab signals={signals} market={mkt} strategy={strat} indices={indices} onClearStrategy={()=>setStratP(null)} pcrHistory={pcrHistory} onLogTrade={setLogModal} onPlaceOrder={setPlaceModal} userPlan={user?.plan||"free"}/></> }
+          {tab==="signals"&&<><div className="stats-grid" style={{marginBottom:12}}>{[
+            {l:"Signals",v:signals.length,c:"var(--acc)",sub:(mkt!=="ALL"?mkt:"All Markets")+(strat?" · "+strat:"")},
+            {l:"Bullish ▲",v:bull,c:"var(--grn)",sub:signals.length>0?`${Math.round(bull/signals.length*100)}% of signals`:"no signals"},
+            {l:"Bearish ▼",v:bear,c:"var(--red)",sub:signals.length>0?`${Math.round(bear/signals.length*100)}% of signals`:"no signals"},
+            {l:"Avg Score",v:signals.length>0?Math.round(signals.reduce((a,s)=>a+(s.score||0),0)/signals.length):"—",c:"var(--yel)",sub:signals.length>0?"signal quality":"waiting"},
+          ].map((s,i)=>(<div key={i} className="stat-card"><div className="stat-lbl">{s.l}</div><div className="stat-val" style={{color:s.c}}>{s.v}</div><div className="stat-sub">{s.sub}</div></div>))}</div><SignalsTab signals={signals} market={mkt} strategy={strat} indices={indices} onClearStrategy={()=>setStratP(null)} pcrHistory={pcrHistory} onLogTrade={setLogModal} onPlaceOrder={setPlaceModal} userPlan={user?.plan||"free"}/></> }
           {tab==="tradelog"&&<TraderLoggerTab/>}
           {tab==="analytics"&&<AnalyticsTab/>}
           {tab==="paper"&&<PaperTab/>}
