@@ -170,6 +170,10 @@ class BacktestEngine:
 
         sym = sig.symbol.split()[0].strip().upper()
 
+        # Calendar Spread v3: "NIFTY CAL {strike} {opt_t} {near_ts} {far_ts}"
+        if " CAL " in sig.symbol:
+            return self._price_calendar(day, sym, sig.symbol, dt)
+
         # Iron Condor: "NIFTY IC sell_ce/buy_ce/sell_pe/buy_pe"
         if " IC " in sig.symbol:
             return self._price_condor(day, sym, sig.symbol)
@@ -222,6 +226,58 @@ class BacktestEngine:
         atm_sub = sub[sub["STRIKE_PR"] == atm]
         p       = pd.to_numeric(atm_sub["SETTLE_PR"], errors="coerce").dropna()
         return float(p.mean()) if not p.empty else None
+
+    def _price_calendar(self, day: pd.DataFrame, sym: str, symbol: str,
+                        current_dt: pd.Timestamp) -> Optional[float]:
+        """
+        Calendar Spread v3 price lookup.
+        Symbol: "NIFTY CAL {strike} {opt_t} {near_yyyymmdd} {far_yyyymmdd}"
+        Returns current net credit = near_current - far_current.
+
+        When near has expired (current_dt >= near_exp), returns just -far_current
+        (near leg = 0 at expiry, far leg still has value that erodes our P&L).
+
+        P&L for seller = entry_net - current_net
+          = (near_entry - far_entry) - (near_current - far_current)
+        """
+        try:
+            parts   = symbol.split()
+            # parts: [sym, 'CAL', strike, opt_t, near_ts, far_ts]
+            strike  = float(parts[2])
+            opt_t   = parts[3].upper()
+            near_dt = pd.Timestamp(parts[4])
+            far_dt  = pd.Timestamp(parts[5])
+        except (IndexError, ValueError):
+            return None
+
+        def get_settle(expiry_dt: pd.Timestamp) -> Optional[float]:
+            all_dates = self.df[self.df["DATE"] == current_dt]
+            if all_dates.empty:
+                return None
+            sub = all_dates[
+                (all_dates["SYMBOL"].str.strip().str.upper() == sym) &
+                (all_dates["STRIKE_PR"] == strike) &
+                (all_dates["OPTION_TYP"].str.upper() == opt_t) &
+                (all_dates["EXPIRY_DT"] == expiry_dt)
+            ]
+            p = pd.to_numeric(sub["SETTLE_PR"], errors="coerce").dropna()
+            return float(p.iloc[0]) if not p.empty else None
+
+        # Near leg
+        if current_dt >= near_dt:
+            near_val = 0.0   # near has expired → worth 0
+        else:
+            near_val = get_settle(near_dt)
+            if near_val is None:
+                return None
+
+        # Far leg
+        far_val = get_settle(far_dt)
+        if far_val is None:
+            # Try to get far leg from closest available expiry
+            return near_val   # fallback: treat as only tracking near
+
+        return near_val - far_val   # net spread value (decreases as near decays → profit for seller)
 
     def _price_condor(self, day: pd.DataFrame, sym: str, symbol: str) -> Optional[float]:
         """
