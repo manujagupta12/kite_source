@@ -306,7 +306,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--body)}
 .billing-toggle{display:flex;gap:4px;background:var(--s2);border:1px solid var(--br);border-radius:8px;padding:3px;margin-bottom:18px;width:fit-content}
 .billing-tab{padding:5px 16px;border-radius:6px;font-size:11px;font-family:var(--mono);cursor:pointer;color:var(--muted);transition:all .12s}
 .billing-tab.act{background:var(--acc);color:#000;font-weight:700}
-.plans-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.plans-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:20px}
 .plan-card{background:var(--s1);border:1px solid var(--br);border-radius:12px;padding:18px;position:relative;transition:border-color .15s}
 .plan-card.current{border-color:rgba(0,212,255,.4);background:rgba(0,212,255,.04)}
 .plan-badge{font-size:8px;font-family:var(--mono);font-weight:700;padding:2px 7px;border-radius:3px;position:absolute;top:11px;right:11px;letter-spacing:.8px}
@@ -328,6 +328,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--body)}
 .mob-nav-it{display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;padding:6px 10px;border-radius:8px;transition:all .12s;color:var(--muted);min-width:44px}
 .mob-nav-it.act{color:var(--acc)}
 .mob-nav-ico{font-size:16px;line-height:1}.mob-nav-lbl{font-size:9px;letter-spacing:.3px}
+@keyframes slideIn{from{opacity:0;transform:translateY(-18px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.sig-toast{position:fixed;top:14px;right:18px;z-index:999;background:var(--s1);border:1px solid rgba(0,255,157,.35);border-left:3px solid var(--grn);border-radius:9px;padding:9px 15px;font-family:var(--mono);font-size:10px;color:var(--grn);display:flex;align-items:center;gap:8px;box-shadow:0 8px 30px rgba(0,0,0,.5);animation:slideIn .25s ease-out}
+.sig-toast::before{content:'◈';font-size:11px;animation:pulse 1s infinite}
 @media(max-width:900px){.sidebar{display:none}.mob-nav{display:flex}.app{padding-bottom:var(--mob-nav-h)}.content{padding:10px}.sigs-grid{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}.idx-strip{grid-template-columns:repeat(2,1fr)}.movers-grid{grid-template-columns:1fr}.plans-grid{grid-template-columns:repeat(2,1fr)}.topbar{padding:0 10px;gap:6px}.src-pill{display:none}}
 @media(max-width:600px){.stats-grid{grid-template-columns:repeat(2,1fr);gap:6px}.plans-grid{grid-template-columns:1fr 1fr}.form-row{grid-template-columns:1fr}.billing-toggle{width:100%}.billing-tab{flex:1;text-align:center}.tl-row{grid-template-columns:0.5fr 1fr 0.7fr 0.5fr auto}.topbar-right .badge:not(:last-child){display:none}}
 @media(min-width:1400px){.sigs-grid{grid-template-columns:repeat(3,1fr)}}
@@ -664,7 +667,13 @@ function SignalsTab({signals,market,strategy,indices,onClearStrategy,pcrHistory,
       <span>⏰</span><span>{isAfterMarketClose()?"MARKET CLOSED — signals shown are from today's session":"PRE-MARKET — live signals begin at 9:15 AM IST"}</span>
     </div>}{(market!=="ALL"||strategy)&&(<div className="filter-crumb">{market!=="ALL"&&<span style={{color:mktObj?.color||"var(--acc)"}}>{mktObj?.label||market}</span>}{market!=="ALL"&&strategy&&<span style={{color:"var(--dim)"}}>›</span>}{strategy&&<span style={{color:STRAT_INFO[skey(strategy)]?.color||"var(--acc)"}}>{strategy}</span>}<span style={{color:"var(--muted)",fontSize:9}}>&nbsp;— {filtered.length} signal{filtered.length!==1?"s":""}</span>{strategy&&<span className="filter-crumb-clear" onClick={onClearStrategy}>× Clear</span>}
       {expiredCount>0&&<span style={{cursor:"pointer",fontSize:8,color:showExpired?"var(--red)":"var(--dim)",fontFamily:"var(--mono)",marginLeft:"auto",padding:"1px 6px",borderRadius:4,border:"1px solid rgba(255,61,90,.2)",background:"rgba(255,61,90,.05)"}} onClick={()=>setShowExpired(v=>!v)}>{showExpired?`Hide ${expiredCount} expired`:`+${expiredCount} expired`}</span>}
-    </div>)}{filtered.length>0?(<div className="sigs-grid">{filtered.map((s,i)=><SigCard key={s.id||`${s.timestamp}-${i}`} sig={s} pcrHistory={pcrHistory} onLogTrade={onLogTrade} onPlaceOrder={onPlaceOrder} userPlan={userPlan}/>)}</div>):(<div className="empty"><div className="empty-ico">📊</div><div className="empty-t">No signals for this filter</div><div className="empty-s">{market!=="ALL"?`${market}${strategy?" • "+strategy:""} — 9:15–15:30`:"Backend pushes every 5s"}</div></div>)}</div>);}
+    </div>)}{filtered.length>0?(<div className="sigs-grid">{filtered.map((s,i)=><SigCard key={s.id||`${s.timestamp}-${i}`} sig={s} pcrHistory={pcrHistory} onLogTrade={onLogTrade} onPlaceOrder={onPlaceOrder} userPlan={userPlan}/>)}</div>):(<div className="empty">
+  <div className="empty-ico">{isMarketOpen()?"📡":"🌙"}</div>
+  <div className="empty-t">{isMarketOpen()?"Waiting for signals…":"Market is closed"}</div>
+  <div className="empty-s" style={{marginBottom:8}}>{isMarketOpen()?`${market!=="ALL"?market+" · ":""}Backend refreshes every 5s`:isAfterMarketClose()?"Next session Mon–Fri at 9:15 AM IST":"Pre-market · Live signals start at 9:15 AM IST"}</div>
+  {!isMarketOpen()&&<div style={{fontSize:9,fontFamily:"var(--mono)",color:"var(--acc)",padding:"5px 14px",background:"rgba(0,212,255,.05)",border:"1px solid rgba(0,212,255,.12)",borderRadius:6,display:"inline-block"}}>Historical signals visible above · New signals after open</div>}
+  {isMarketOpen()&&market!=="ALL"&&<div style={{fontSize:9,color:"var(--muted)"}}>Try selecting "All" in the sidebar to see all instruments</div>}
+</div>)}</div>);}
 
 function TraderLoggerTab(){
   const [data,setData]=useState(null);
@@ -856,10 +865,9 @@ function BrokerTab({userPlan}){
   };
 
   const BROKERS=[
-    {id:"dhan",   name:"Dhan",    desc:"Your primary broker",         docsUrl:"https://web.dhan.co",         envKey:"DHAN_ACCESS_TOKEN",    color:"#FF6B00"},
-    {id:"kite",   name:"Kite",    desc:"Zerodha Kite Connect",        docsUrl:"https://kite.trade/connect",  envKey:"KITE_ACCESS_TOKEN",    color:"#387ED1"},
-    {id:"upstox", name:"Upstox",  desc:"Free API, popular with youth",docsUrl:"http://localhost:8000/broker/upstox-auth", envKey:"UPSTOX_ACCESS_TOKEN", color:"#6B48FF"},
-    {id:"paper",  name:"Paper",   desc:"Simulated — no real orders",  docsUrl:null,                          envKey:null,                   color:"#9E9E9E"},
+    {id:"dhan",  name:"Dhan",  desc:"Your primary broker",        docsUrl:"https://web.dhan.co",        envKey:"DHAN_ACCESS_TOKEN", color:"#FF6B00"},
+    {id:"kite",  name:"Kite",  desc:"Zerodha Kite Connect",       docsUrl:"https://kite.trade/connect", envKey:"KITE_ACCESS_TOKEN", color:"#387ED1"},
+    {id:"paper", name:"Paper", desc:"Simulated — no real orders", docsUrl:null,                         envKey:null,                color:"#9E9E9E"},
   ];
 
   const active=status?.broker||"none";
@@ -878,13 +886,7 @@ function BrokerTab({userPlan}){
           {status.ok?`● ${active.toUpperCase()} ACTIVE`:"● NO BROKER"}
         </span>}
       </div>
-      {status?.upstox_needs_auth&&<div style={{background:"rgba(107,72,255,.08)",border:"1px solid rgba(107,72,255,.25)",borderRadius:7,padding:"8px 12px",fontSize:10,color:"#A78BFA",marginBottom:10}}>
-        ⚡ Upstox API key found but not authenticated.{" "}
-        <a href="http://localhost:8000/broker/upstox-auth" target="_blank" rel="noreferrer"
-           style={{color:"#A78BFA",fontWeight:700,textDecoration:"underline"}}>
-          Click here to connect Upstox →
-        </a>
-      </div>}
+      {/* Upstox banner removed — not in use */}
       {!isPaid&&<div style={{background:"rgba(245,197,24,.06)",border:"1px solid rgba(245,197,24,.2)",borderRadius:7,padding:"7px 11px",fontSize:10,color:"var(--yel)"}}>
         ⚠ Live order placement requires Weekly plan or above. Broker status visible on all plans.
       </div>}
@@ -922,11 +924,7 @@ function BrokerTab({userPlan}){
               onClick={()=>switchBroker(b.id)} disabled={!!switching}>
               {isSwitching?"Switching…":"Use this"}
             </button>}
-            {b.id==="upstox"&&!isAvail&&b.docsUrl&&<a href={b.docsUrl} target="_blank" rel="noreferrer"
-              className="btn btn-ghost btn-sm" style={{fontSize:9,textDecoration:"none",flex:1,textAlign:"center",display:"block",padding:"5px 0"}}>
-              Connect →
-            </a>}
-            {b.id!=="upstox"&&!isAvail&&b.docsUrl&&<a href={b.docsUrl} target="_blank" rel="noreferrer"
+            {!isAvail&&b.docsUrl&&<a href={b.docsUrl} target="_blank" rel="noreferrer"
               className="btn btn-ghost btn-sm" style={{fontSize:9,textDecoration:"none",flex:1,textAlign:"center",display:"block",padding:"5px 0"}}>
               Get token →
             </a>}
@@ -940,11 +938,10 @@ function BrokerTab({userPlan}){
     <div style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:10,padding:"14px 16px"}}>
       <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",fontWeight:700,marginBottom:10,letterSpacing:"1px"}}>SETUP GUIDE</div>
       {[
-        ["Dhan (recommended)",   "Add DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN to .env → restart",       "#FF6B00"],
-        ["Zerodha Kite",         "Add KITE_API_KEY + KITE_ACCESS_TOKEN to .env → restart",          "#387ED1"],
-        ["Upstox",               "Add UPSTOX_API_KEY + UPSTOX_API_SECRET to .env → restart → visit /broker/upstox-auth", "#6B48FF"],
-        ["Broker priority",      "Auto-selects: Dhan first, then Kite, then Upstox, then Paper",    "#9E9E9E"],
-        ["Force broker",         "Set BROKER=dhan (or kite / upstox / paper) in .env",              "#00d4ff"],
+        ["Dhan (recommended)", "Add DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN to .env → restart",      "#FF6B00"],
+        ["Zerodha Kite",       "Add KITE_API_KEY + KITE_ACCESS_TOKEN to .env → restart",           "#387ED1"],
+        ["Broker priority",    "Auto-selects: Dhan first, then Kite, then Paper",                   "#9E9E9E"],
+        ["Force broker",       "Set BROKER=dhan (or kite / paper) in .env",                         "#00d4ff"],
       ].map(([k,v,c])=>(<div key={k} style={{display:"flex",gap:10,marginBottom:7,fontSize:10}}>
         <div style={{fontFamily:"var(--mono)",color:c,minWidth:130,fontSize:9,flexShrink:0,paddingTop:2}}>{k}</div>
         <div style={{color:"var(--muted)",lineHeight:1.5}}>{v}</div>
@@ -1105,11 +1102,135 @@ function MarginTab(){
   </div>);
 }
 
+function TelegramSettingsPanel(){
+  const [status,setStatus]=useState(null);
+  const [testing,setTesting]=useState(false);
+  const [msg,setMsg]=useState("");
+
+  useEffect(()=>{api("/telegram/status").then(setStatus).catch(()=>{});},[]);
+
+  const test=async()=>{
+    setTesting(true);setMsg("");
+    try{
+      const r=await api("/telegram/test",{method:"POST"});
+      setMsg(r.success?"✅ Test message sent to Telegram! Check your chat.":r.detail||"Failed");
+    }catch(e){
+      const err=e.message||"";
+      if(err.includes("400")||err.includes("not set")){
+        setMsg("⚠ Set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env, then restart backend");
+      }else{
+        setMsg("✗ "+err);
+      }
+    }finally{setTesting(false);}
+  };
+
+  const ok=status?.configured;
+  return(
+    <div style={{background:"var(--s1)",border:`1px solid ${ok?"rgba(0,212,255,.25)":"rgba(255,61,90,.2)"}`,borderRadius:12,padding:"16px 18px",marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+        <span style={{fontSize:20}}>✈️</span>
+        <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--acc)"}}>TELEGRAM SIGNAL BOT</div>
+        <span style={{fontSize:9,fontFamily:"var(--mono)",padding:"2px 8px",borderRadius:10,
+          background:ok?"rgba(0,255,157,.1)":"rgba(255,61,90,.1)",
+          color:ok?"var(--grn)":"var(--red)",
+          border:`1px solid ${ok?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`}}>
+          {ok?"● ACTIVE":"● NOT CONFIGURED"}
+        </span>
+      </div>
+
+      {!ok&&<div style={{background:"rgba(255,197,24,.06)",border:"1px solid rgba(255,197,24,.2)",borderRadius:8,padding:"12px 14px",marginBottom:12}}>
+        <div style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--yel)",fontWeight:700,marginBottom:8}}>SETUP IN 3 STEPS</div>
+        {[
+          ["1","Message @BotFather on Telegram → /newbot → copy the API token"],
+          ["2","Add your bot to your channel/group as admin, then message @userinfobot to get chat ID"],
+          ["3","Add to .env: TELEGRAM_BOT_TOKEN=xxx and TELEGRAM_CHAT_ID=-100xxx → restart backend"],
+        ].map(([n,t])=>(
+          <div key={n} style={{display:"flex",gap:10,marginBottom:7}}>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--acc)",minWidth:16}}>{n}.</div>
+            <div style={{fontSize:10,color:"var(--muted)",lineHeight:1.5}}>{t}</div>
+          </div>
+        ))}
+      </div>}
+
+      {ok&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+        {[
+          ["Token",status?.has_token?"✓ Configured":"✗ Missing","var(--grn)"],
+          ["Chat ID",status?.has_chat_id?"✓ Configured":"✗ Missing","var(--grn)"],
+        ].map(([k,v,c])=>(
+          <div key={k} style={{background:"var(--s2)",borderRadius:7,padding:"8px 12px"}}>
+            <div style={{fontSize:8,color:"var(--muted)",letterSpacing:"1px",marginBottom:4}}>{k}</div>
+            <div style={{fontFamily:"var(--mono)",fontSize:10,color:c}}>{v}</div>
+          </div>
+        ))}
+      </div>}
+
+      {msg&&<div style={{fontSize:11,padding:"7px 11px",borderRadius:7,marginBottom:10,
+        background:msg.startsWith("✅")?"rgba(0,255,157,.08)":"rgba(255,197,24,.06)",
+        color:msg.startsWith("✅")?"var(--grn)":"var(--yel)",
+        border:`1px solid ${msg.startsWith("✅")?"rgba(0,255,157,.2)":"rgba(255,197,24,.2)"}`}}>
+        {msg}
+      </div>}
+
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button className="btn btn-primary" style={{fontSize:10}} onClick={test} disabled={testing}>
+          {testing?"Sending…":"📨 Send Test Message"}
+        </button>
+        <div style={{fontSize:9,color:"var(--muted)",alignSelf:"center"}}>
+          Signals with score ≥ 75 are auto-posted when bot is active.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SubscriptionTab({user}){
   const [plans,setPlans]=useState([]);const [status,setStatus]=useState(null);
   const [billing,setBilling]=useState("monthly");const [loading,setLoading]=useState("");const [msg,setMsg]=useState("");
   useEffect(()=>{api("/subscription/plans").then(d=>setPlans(d.plans||[])).catch(()=>{});api("/subscription/status").then(d=>{setStatus(d);if(d.billing)setBilling(d.billing);}).catch(()=>{});},[]);
-  const upgrade=async(planId)=>{setLoading(planId);setMsg("");try{const r=await api("/subscription/upgrade",{method:"POST",body:JSON.stringify({plan:planId,billing})});if(r.plan){setMsg(`✓ ${r.plan} (${r.billing}) ₹${r.price}`);api("/subscription/status").then(setStatus);}else setMsg(r.detail||"Upgrade failed");}catch(e){setMsg("Error: "+e.message);}finally{setLoading("");}}
+  const upgrade=async(planId)=>{
+    setLoading(planId);setMsg("");
+    try{
+      // Step 1: Check if Razorpay is configured
+      const rzpStatus=await api("/subscription/razorpay-status").catch(()=>({configured:false}));
+      if(!rzpStatus.configured||rzpStatus.key_id==="rzp_test_mock"||!rzpStatus.key_id){
+        // No Razorpay key — admin/dev direct upgrade
+        const r=await api("/subscription/upgrade",{method:"POST",body:JSON.stringify({plan:planId,billing})});
+        if(r.plan){setMsg(`✓ ${r.plan} (${r.billing}) activated`);api("/subscription/status").then(setStatus);}
+        else setMsg(r.detail||"Upgrade failed");
+        return;
+      }
+      // Step 2: Create Razorpay order
+      const order=await api("/subscription/create-order",{method:"POST",body:JSON.stringify({plan:planId,billing})});
+      if(!order.order_id){setMsg("Could not create payment order");return;}
+      // Step 3: Open Razorpay checkout
+      if(!window.Razorpay){
+        const s=document.createElement("script");s.src="https://checkout.razorpay.com/v1/checkout.js";
+        document.head.appendChild(s);await new Promise(r=>s.onload=r);
+      }
+      await new Promise((resolve,reject)=>{
+        const rzp=new window.Razorpay({
+          key:order.key_id,amount:order.amount,currency:order.currency||"INR",
+          order_id:order.order_id,name:"AlgoTrade",description:`${planId} plan (${billing})`,
+          theme:{color:"#00d4ff"},
+          handler:async(response)=>{
+            try{
+              const v=await api("/subscription/verify-payment",{method:"POST",body:JSON.stringify({
+                razorpay_order_id:response.razorpay_order_id,
+                razorpay_payment_id:response.razorpay_payment_id,
+                razorpay_signature:response.razorpay_signature,
+                plan:planId,billing
+              })});
+              if(v.success){setMsg(`✓ Payment successful! ${planId} (${billing}) activated`);api("/subscription/status").then(setStatus);}
+              else setMsg(v.detail||"Payment verification failed");
+            }catch(e){setMsg("Verification error: "+e.message);}
+            resolve();
+          },
+          modal:{ondismiss:()=>{setMsg("Payment cancelled");resolve();}},
+        });
+        rzp.open();
+      });
+    }catch(e){setMsg("Error: "+e.message);}finally{setLoading("");}
+  };
   const currentPlan=status?.plan||user?.plan||"free";const currentBilling=status?.billing||"monthly";
   const BADGE_COL={free:"#5a7a9a",weekly:"#00d4ff",monthly:"#00ff9d",annual:"#f5c518"};
   const getPrice=planId=>{const pp=PLAN_PRICES[planId];if(!pp)return null;const p=pp[billing];return p===undefined?null:p;};
@@ -1360,8 +1481,19 @@ function App(){
 
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),100);return()=>clearInterval(t);},[]);
 
+  const [newSigToast,setNewSigToast]=useState(null);
   const addSignals=useCallback((incoming)=>{
-    setSigs(prev=>mergeSignals(prev,Array.isArray(incoming)?incoming:[incoming]));
+    const arr=Array.isArray(incoming)?incoming:[incoming];
+    setSigs(prev=>{
+      const before=prev.length;
+      const next=mergeSignals(prev,arr);
+      if(next.length>before&&arr[0]){
+        const s=arr[0];
+        setNewSigToast({id:Date.now(),text:`${s.direction||"NEW"} · ${s.instrument||s.symbol||s.market||"SIGNAL"} · Score ${s.score||"—"}`});
+        setTimeout(()=>setNewSigToast(null),4000);
+      }
+      return next;
+    });
   },[]);
 
   const addPcrHistory=useCallback((sig)=>{
@@ -1431,15 +1563,16 @@ function App(){
   const selectMarket=m=>{setMktP(m);setStratP(null);setTabP("signals");setOpenMkt(m!=="ALL"?m:null);};
   const toggleDropdown=m=>{setOpenMkt(prev=>prev===m?null:m);};
   const selectStrategy=s=>{setStratP(prev=>prev===s?null:s);setTabP("signals");};
-  const TABS=[{id:"signals",lbl:`Signals (${signals.length})`},{id:"tradelog",lbl:"Trade Log"},{id:"paper",lbl:"Paper"},{id:"analytics",lbl:"Analytics"},{id:"why",lbl:"💡 Why It Works"},{id:"subscription",lbl:"Plans"}];
-  const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"tradelog",ico:"📝",lbl:"Log"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"margin",ico:"₹",lbl:"Margin"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"subscription",ico:"★",lbl:"Plans"}];
+  const TABS=[{id:"signals",lbl:`Signals (${signals.length})`},{id:"tradelog",lbl:"Trade Log"},{id:"paper",lbl:"Paper"},{id:"analytics",lbl:"Analytics"},{id:"audit",lbl:"🔬 System Health"},{id:"why",lbl:"💡 Why It Works"},{id:"subscription",lbl:"Plans"}];
+  const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"subscription",ico:"★",lbl:"Plans"}];
 
   return(<><style>{CSS}</style>
     {logModal&&<LogTradeModal sig={logModal} onClose={()=>setLogModal(null)} onLogged={()=>{setLogModal(null);setTabP("tradelog");}}/>}
     {placeModal&&<PlaceOrderModal sig={placeModal} userPlan={user?.plan||"free"} onClose={()=>setPlaceModal(null)}/>}
+    {newSigToast&&<div key={newSigToast.id} className="sig-toast">NEW SIGNAL · {newSigToast.text}</div>}
     <div className="app">
       <aside className="sidebar">
-        <div className="sb-logo"><div className="logo-t">ALGOTRADE</div><div className="logo-s">NSE SIGNAL PLATFORM v1.0.0</div></div>
+        <div className="sb-logo"><div className="logo-t">ALGOTRADE</div><div className="logo-s">NSE F&amp;O SIGNAL PLATFORM v3.0</div></div>
         <nav className="sb-nav">
           <div className="nav-sect">Navigate</div>
           {[{id:"signals",ico:"◈",lbl:"Live Signals"},{id:"tradelog",ico:"📝",lbl:"Trade Logger"},{id:"paper",ico:"📄",lbl:"Paper Trade"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"margin",ico:"₹",lbl:"Margin Setup"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"why",ico:"💡",lbl:"Why It Works"},{id:"subscription",ico:"★",lbl:"Subscription"}].map(n=>(
@@ -1449,9 +1582,10 @@ function App(){
           {MARKETS.map(m=>{const cnt=m.id!=="ALL"?signals.filter(s=>matchesMarket(s,m.id)).length:0;return(<div key={m.id}><div className={`mkt-btn ${mkt===m.id?"act":""}`}><div className="mkt-label-area" onClick={()=>selectMarket(m.id)}><div className="mkt-badge" style={{background:m.color+"20",color:m.color}}>{m.icon}</div><span className="mkt-name" style={{color:mkt===m.id?m.color:undefined}}>{m.label}{m.id!=="ALL"&&cnt>0&&<span style={{marginLeft:4,fontSize:7,background:m.color+"20",color:m.color,padding:"1px 4px",borderRadius:3}}>{cnt}</span>}</span></div>{m.id!=="ALL"&&<div className="mkt-chev-btn" onClick={e=>{e.stopPropagation();toggleDropdown(m.id);}}><span className={`chev ${openMkt===m.id?"open":""}`}>▾</span></div>}</div>{openMkt===m.id&&m.strategies&&(<div className="strat-list">{m.strategies.map(s=>{const k=skey(s);const info=STRAT_INFO[k]||{color:m.color};const isAct=strat===s;const c=signals.filter(sg=>matchesMarket(sg,m.id)&&matchesStrategy(sg,s)).length;return(<div key={s} className={`strat-it ${isAct?"act":""}`} onClick={()=>selectStrategy(s)}><div className="s-dot" style={{background:isAct?info.color:"var(--br)"}}/><span style={{flex:1}}>{s}</span>{c>0&&<span style={{fontSize:7,fontFamily:"var(--mono)",color:info.color,background:info.color+"18",padding:"1px 4px",borderRadius:3}}>{c}</span>}<span style={{fontSize:7,color:info.color,fontFamily:"var(--mono)",marginLeft:2}}>{info.tag}</span></div>);})}</div>)}</div>);
           })}
           <div className="nav-sect">Data Sources</div>
-          <div className="feed-row feed-ok">◉ NSE Direct API</div>
-          <div className="feed-row" style={{color:"#22c55e"}}>◉ Dhan WebSocket</div>
-          <div className="feed-row" style={{color:"#22c55e"}}>◉ NSE OI / PCR</div>
+          <div className="feed-row" style={{color:nseLive?"var(--grn)":"var(--yel)"}}>{nseLive?"◉":"◌"} NSE Direct API{nseLive?"":" (connecting)"}</div>
+          <div className="feed-row" style={{color:dhanLive?"var(--grn)":"var(--dim)"}}>{dhanLive?"◉":"○"} Dhan WebSocket{dhanLive?"":" (off)"}</div>
+          <div className="feed-row" style={{color:pcrCount>0?"#22c55e":"var(--dim)"}}>{pcrCount>0?"◉":"○"} NSE OI / PCR{pcrCount>0?` (${pcrCount})`:""}</div>
+          <div className="feed-row" style={{color:wsStatus==="live"?"var(--grn)":wsStatus==="connecting"?"var(--yel)":"var(--red)"}}>{wsStatus==="live"?"◉":wsStatus==="connecting"?"◌":"◎"} WS {wsStatus.toUpperCase()}</div>
           <div style={{marginTop:"auto",padding:"10px 6px",borderTop:"1px solid var(--br)"}}>
             <div className="nav-it" onClick={()=>{localStorage.removeItem("tok");setUser(null);}}><span className="nav-ico">↩</span>Logout</div>
           </div>
@@ -1476,12 +1610,18 @@ function App(){
           {tab==="signals"&&signals.length>0&&(<div className="tab-right"><span className="count-pill" style={{background:"rgba(0,255,157,.08)",color:"var(--grn)"}}>▲{bull}</span><span className="count-pill" style={{background:"rgba(255,61,90,.08)",color:"var(--red)"}}>▼{bear}</span><span className="count-pill" style={{background:"rgba(0,212,255,.08)",color:"var(--acc)"}}>◆{neut}</span></div>)}
         </div>
         <div className="content">
-          {tab==="signals"&&<><div className="stats-grid" style={{marginBottom:12}}>{[{l:"Total",v:signals.length,c:"var(--acc)"},{l:"F&O",v:foCount,c:"var(--grn)"},{l:"PCR",v:pcrCount,c:"#22c55e"},{l:"Equity",v:signals.filter(s=>s.market==="EQUITY").length,c:"var(--pur)"}].map((s,i)=>(<div key={i} className="stat-card"><div className="stat-lbl">{s.l}</div><div className="stat-val" style={{color:s.c}}>{s.v}</div>{i===0&&<div className="stat-sub">{mkt!=="ALL"?mkt:"All"}{strat?" · "+strat:""}</div>}</div>))}</div><SignalsTab signals={signals} market={mkt} strategy={strat} indices={indices} onClearStrategy={()=>setStratP(null)} pcrHistory={pcrHistory} onLogTrade={setLogModal} onPlaceOrder={setPlaceModal} userPlan={user?.plan||"free"}/></> }
+          {tab==="signals"&&<><div className="stats-grid" style={{marginBottom:12}}>{[
+            {l:"Signals",v:signals.length,c:"var(--acc)",sub:(mkt!=="ALL"?mkt:"All Markets")+(strat?" · "+strat:"")},
+            {l:"Bullish ▲",v:bull,c:"var(--grn)",sub:signals.length>0?`${Math.round(bull/signals.length*100)}% of signals`:"no signals"},
+            {l:"Bearish ▼",v:bear,c:"var(--red)",sub:signals.length>0?`${Math.round(bear/signals.length*100)}% of signals`:"no signals"},
+            {l:"Avg Score",v:signals.length>0?Math.round(signals.reduce((a,s)=>a+(s.score||0),0)/signals.length):"—",c:"var(--yel)",sub:signals.length>0?"signal quality":"waiting"},
+          ].map((s,i)=>(<div key={i} className="stat-card"><div className="stat-lbl">{s.l}</div><div className="stat-val" style={{color:s.c}}>{s.v}</div><div className="stat-sub">{s.sub}</div></div>))}</div><SignalsTab signals={signals} market={mkt} strategy={strat} indices={indices} onClearStrategy={()=>setStratP(null)} pcrHistory={pcrHistory} onLogTrade={setLogModal} onPlaceOrder={setPlaceModal} userPlan={user?.plan||"free"}/></> }
           {tab==="tradelog"&&<TraderLoggerTab/>}
           {tab==="analytics"&&<AnalyticsTab/>}
           {tab==="paper"&&<PaperTab/>}
           {tab==="margin"&&<MarginTab/>}
-          {tab==="broker"&&<BrokerTab userPlan={user?.plan||"free"}/>}
+          {tab==="broker"&&<div><TelegramSettingsPanel/><BrokerTab userPlan={user?.plan||"free"}/></div>}
+          {tab==="audit"&&<AuditPanel/>}
           {tab==="why"&&<StrategyTrustPanel/>}
           {tab==="subscription"&&<SubscriptionTab user={user}/>}
         </div>
@@ -1490,6 +1630,161 @@ function App(){
       <nav className="mob-nav">{MOB_NAV.map(n=>(<div key={n.id} className={`mob-nav-it ${tab===n.id?"act":""}`} onClick={()=>setTabP(n.id)}><span className="mob-nav-ico">{n.ico}</span><span className="mob-nav-lbl">{n.lbl}</span></div>))}</nav>
     </div>
   </>);
+}
+
+// ── System Health / Audit Panel ──────────────────────────────────────────
+function AuditPanel() {
+  const [audit, setAudit] = useState(null);
+  const [accuracy, setAccuracy] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(() => {
+    setLoading(true);
+    Promise.all([
+      api("/signals/audit").catch(() => null),
+      api("/signals/accuracy").catch(() => null),
+    ]).then(([a, ac]) => {
+      setAudit(a); setAccuracy(ac); setLoading(false);
+    });
+  }, []);
+
+  useEffect(() => { refresh(); const t = setInterval(refresh, 15000); return () => clearInterval(t); }, [refresh]);
+
+  const statusCol = s =>
+    s === "OK" || s === "PRODUCING" ? "var(--grn)" :
+    s === "PARTIAL" || s === "WARN" || s === "NO_SIGNALS_YET" ? "var(--yel)" :
+    s === "MARKET_CLOSED" ? "var(--muted)" : "var(--red)";
+
+  const statusDot = s => <span style={{display:"inline-block",width:7,height:7,borderRadius:"50%",background:statusCol(s),marginRight:5,flexShrink:0}}/>;
+
+  if (loading && !audit) return <div style={{padding:24,color:"var(--muted)",fontFamily:"var(--mono)",fontSize:11}}>Loading system health…</div>;
+
+  const feeds = audit ? [
+    { label: "NSE Option Chain Feed", detail: audit.nse_feed?.status || "UNKNOWN", ok: audit.nse_feed?.nse_ok_flag, extra: audit.nse_feed?.consecutive_fails > 0 ? `${audit.nse_feed.consecutive_fails} consecutive fails` : "" },
+    { label: "Dhan WebSocket", detail: audit.dhan_feed?.status || "UNKNOWN", ok: audit.dhan_feed?.connected },
+    { label: "PCR Strategy Module", detail: audit.pcr_feed?.status || "UNKNOWN", ok: audit.pcr_feed?.connected },
+    { label: "Gold Feed (Delta Exchange 24/7)", detail: audit.gold_feed?.status || "UNKNOWN", ok: audit.gold_feed?.connected, extra: audit.gold_feed?.signals_today > 0 ? `${audit.gold_feed.signals_today} signals today` : "" },
+  ] : [];
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="card" style={{marginBottom:12,padding:"12px 14px"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"var(--acc)"}}>🔬 SYSTEM HEALTH AUDIT</div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--muted)"}}>{audit?.ist_time || ""}</span>
+            <button className="btn btn-ghost" style={{fontSize:9,padding:"2px 8px"}} onClick={refresh}>↻ Refresh</button>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",borderRadius:6,
+          background: audit?.overall_status==="ALL_OK" ? "rgba(0,255,157,.06)" : audit?.overall_status==="PARTIAL" ? "rgba(245,197,24,.06)" : "rgba(255,61,90,.06)",
+          border: `1px solid ${audit?.overall_status==="ALL_OK" ? "rgba(0,255,157,.2)" : audit?.overall_status==="PARTIAL" ? "rgba(245,197,24,.2)" : "rgba(255,61,90,.2)"}`}}>
+          {statusDot(audit?.overall_status || "DOWN")}
+          <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,color:statusCol(audit?.overall_status || "DOWN")}}>{audit?.overall_status || "UNKNOWN"}</span>
+          <span style={{color:"var(--dim)"}}>|</span>
+          <span style={{fontSize:10,color:"var(--muted)"}}>{audit?.action_required || ""}</span>
+        </div>
+      </div>
+
+      {/* Feed Status */}
+      <div className="card" style={{marginBottom:12}}>
+        <div className="card-lbl">Data Feeds</div>
+        {feeds.map((f, i) => (
+          <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:i<feeds.length-1?"1px solid var(--br)":"none"}}>
+            {statusDot(f.ok ? "OK" : "DOWN")}
+            <span style={{flex:1,fontSize:11}}>{f.label}</span>
+            <span style={{fontFamily:"var(--mono)",fontSize:9,color:statusCol(f.ok ? "OK" : "DOWN")}}>{f.detail}</span>
+            {f.extra && <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--yel)",marginLeft:6}}>{f.extra}</span>}
+          </div>
+        ))}
+      </div>
+
+      {/* Per-Strategy Status */}
+      {audit?.strategies && (
+        <div className="card" style={{marginBottom:12}}>
+          <div className="card-lbl">Strategy Signal Production — Today</div>
+          {Object.entries(audit.strategies).map(([strat, info]) => (
+            <div key={strat} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderBottom:"1px solid var(--br)"}}>
+              {statusDot(info.status)}
+              <span style={{flex:1,fontSize:10,fontFamily:"var(--mono)"}}>{strat}</span>
+              <span style={{fontSize:10,color:statusCol(info.status),fontWeight:700}}>{info.count}</span>
+              <span style={{fontSize:9,color:"var(--muted)",marginLeft:4}}>signals</span>
+              {info.last_signal && (
+                <span style={{fontFamily:"var(--mono)",fontSize:8,color:"var(--dim)",marginLeft:8}}>
+                  last: {info.last_signal.slice(11,16)}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Signal Counts */}
+      {audit?.signals_today && (
+        <div className="stats-grid" style={{marginBottom:12}}>
+          {[
+            {l:"Signals Today", v:audit.signals_today.total, c:"var(--acc)"},
+            {l:"Live (NSE)", v:audit.signals_today.live, c:"var(--grn)"},
+            {l:"NSE Feed", v:audit.nse_feed?.nse_ok_flag ? "OK" : "DOWN", c:audit.nse_feed?.nse_ok_flag ? "var(--grn)" : "var(--red)"},
+            {l:"Market", v:audit.market_open ? "OPEN" : "CLOSED", c:audit.market_open ? "var(--grn)" : "var(--muted)"},
+          ].map((s,i) => (
+            <div key={i} className="stat-card">
+              <div className="stat-lbl">{s.l}</div>
+              <div className="stat-val" style={{color:s.c}}>{s.v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Real Accuracy */}
+      <div className="card" style={{marginBottom:12}}>
+        <div className="card-lbl">Signal Accuracy — Real Outcomes Only</div>
+        {accuracy?.total_recorded > 0 ? (
+          <div>
+            <div style={{display:"flex",gap:16,marginBottom:10,flexWrap:"wrap"}}>
+              <div style={{textAlign:"center"}}>
+                <div style={{fontFamily:"var(--mono)",fontSize:22,fontWeight:700,color:"var(--grn)"}}>{accuracy.overall_win_rate}%</div>
+                <div style={{fontSize:9,color:"var(--muted)"}}>Overall Win Rate</div>
+              </div>
+              <div style={{textAlign:"center"}}>
+                <div style={{fontFamily:"var(--mono)",fontSize:22,fontWeight:700,color:"var(--acc)"}}>{accuracy.total_recorded}</div>
+                <div style={{fontSize:9,color:"var(--muted)"}}>Outcomes Recorded</div>
+              </div>
+            </div>
+            {Object.entries(accuracy.by_strategy || {}).map(([strat, bs]) => (
+              <div key={strat} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",borderTop:"1px solid var(--br)"}}>
+                <span style={{flex:1,fontSize:10}}>{strat}</span>
+                <span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:bs.win_rate_pct>=60?"var(--grn)":bs.win_rate_pct>=50?"var(--yel)":"var(--red)"}}>{bs.win_rate_pct}%</span>
+                <span style={{fontSize:9,color:"var(--muted)"}}>{bs.total} trades · avg {bs.avg_move_pts > 0 ? "+" : ""}{bs.avg_move_pts}pts</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{padding:"16px 0",textAlign:"center"}}>
+            <div style={{fontSize:11,color:"var(--muted)",marginBottom:6}}>No outcomes recorded yet.</div>
+            <div style={{fontSize:10,color:"var(--dim)",fontFamily:"var(--mono)"}}>
+              Accuracy data builds as you record real signal results.<br/>
+              Zero defaults. Zero fake numbers. Only what actually happened.
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* NSE Reconnect */}
+      {!audit?.nse_feed?.nse_ok_flag && (
+        <div className="card" style={{border:"1px solid rgba(255,61,90,.2)",background:"rgba(255,61,90,.04)"}}>
+          <div className="card-lbl" style={{color:"var(--red)"}}>⚠ NSE Feed Recovery</div>
+          <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>
+            The NSE option chain feed is down. This is usually a session/cookie expiry issue.
+          </div>
+          <button className="btn btn-danger" style={{fontSize:10}} onClick={() =>
+            api("/nse/reconnect", {method:"POST"}).then(() => setTimeout(refresh, 2000))
+          }>Force NSE Reconnect</button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default App;

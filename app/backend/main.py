@@ -157,6 +157,35 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 _db: Dict[str, Any] = {"users": {}, "trades": {}, "signals": [], "regime": {}}
 _paper: Dict[str, Any] = {}
 
+# ── Daily signal persistence ──────────────────────────────────────────────
+_DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+def _signals_file(d: date = None) -> Path:
+    d = d or date.today()
+    return _DATA_DIR / f"signals_{d.isoformat()}.json"
+
+def _persist_signals() -> None:
+    """Write current in-memory signals to today's JSON file (non-blocking)."""
+    try:
+        with open(_signals_file(), "w") as f:
+            json.dump(_db["signals"], f)
+    except Exception as _pe:
+        logging.debug(f"[Persist] signal save error: {_pe}")
+
+def _load_today_signals() -> None:
+    """On startup, reload today's signals from disk so post-close dashboard shows data."""
+    fp = _signals_file()
+    if not fp.exists():
+        return
+    try:
+        sigs = json.loads(fp.read_text())
+        if isinstance(sigs, list) and sigs:
+            _db["signals"] = sigs[-300:]
+            logging.info(f"[Persist] Loaded {len(_db['signals'])} signals from {fp.name}")
+    except Exception as _le:
+        logging.debug(f"[Persist] signal load error: {_le}")
+
 # ── Subscription Plans ────────────────────────────────────────────────────
 TIERS = {
     "free":    {"strategies": 2,  "instruments": 1, "live": False, "delay_min": 15, "log_trades": False},
@@ -259,6 +288,10 @@ class PaperCloseRequest(BaseModel):
 class UpgradeRequest(BaseModel):
     plan: str; billing: str = "monthly"
 
+class DhanTokenRequest(BaseModel):
+    client_id: str
+    access_token: str
+
 class TLTradeEnterRequest(BaseModel):
     strategy: str; instrument: str = "BANKNIFTY"; option_type: str = "CE"
     direction: str = "LONG"; near_strike: str = "0"; far_strike: str = "0"
@@ -338,8 +371,49 @@ def _mock_pcr_signal(instrument=None):
 
 # ── FIXED: NSE live signal (was _xls_signal, used wrong far_bid key) ───────
 def _nse_signal():
-    # Generate live calendar signal from NSE Direct API via data_provider.
-    if not _NSE_OK or _loader is None:
+    # Generate live calendar signal. Tries NSE first, falls back to Dhan option chain.
+    # Try Dhan option chain directly if NSE data_provider is unavailable
+    if not _NSE_OK or _loader is None or _loader._get_fetcher()._fail_count >= 3:
+        try:
+            from algo.dhan_data import get_parsed_option_chain
+            oc = get_parsed_option_chain("BANKNIFTY")
+            if oc and oc.get("spot_price") and oc.get("expiries"):
+                spot = oc["spot_price"]
+                atm  = oc["atm_strike"]
+                expiries = oc["expiries"]
+                if len(expiries) < 2:
+                    return None
+                near_e, far_e = expiries[0], expiries[1]
+                near_ce = oc["chain"].get((atm, near_e), {}).get("CE") or {}
+                far_ce  = oc["chain"].get((atm, far_e),  {}).get("CE") or {}
+                if not (near_ce and far_ce):
+                    return None
+                spread = round((far_ce.get("bid",0) or 0) - (near_ce.get("ask",0) or 0), 2)
+                fair   = round((far_ce.get("theta",0) - near_ce.get("theta",0)) * 0.5, 2) if near_ce.get("theta") else 0
+                dev    = round(spread - fair, 2)
+                score  = min(95, max(30, 50 + int(abs(dev) * 8)))
+                dirn   = "LONG" if dev < -3 else "SHORT" if dev > 3 else "WAIT"
+                if dirn == "WAIT":
+                    return None
+                return {
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "dhan_live", "market": "FO",
+                    "strategy": "S1 CALENDAR", "score": score,
+                    "direction": dirn, "instrument": "BANKNIFTY",
+                    "symbol": "BANKNIFTY", "near_strike": atm, "far_strike": atm,
+                    "spread": spread, "fair_value": fair, "deviation": dev,
+                    "spot": spot, "vix": None, "regime": "LIVE", "risk": "MEDIUM",
+                    "near_bid": near_ce.get("bid"), "near_ask": near_ce.get("ask"),
+                    "far_bid":  far_ce.get("bid"),  "far_ask":  far_ce.get("ask"),
+                    "near_expiry": near_e, "far_expiry": far_e,
+                    "pcr": oc.get("pcr"), "support": oc.get("top_pe_oi_strike"),
+                    "resistance": oc.get("top_ce_oi_strike"),
+                    "reason": f"CE Spread {spread:+.2f} | Fair {fair:+.2f} | Dev {dev:+.2f} [Dhan]",
+                    "action": f"{dirn} BANKNIFTY Calendar @ {atm}",
+                    "event_type": "signal",
+                }
+        except Exception as _de:
+            logging.debug(f"[DhanData] signal fallback error: {_de}")
         return None
     try:
         df = _loader.get_instruments("BANKNIFTY")
@@ -423,7 +497,9 @@ def _run_all_strategies() -> list:
     try:
         df_raw = _loader.get_instruments("NIFTY")
         if df_raw is None or df_raw.empty: return []
-        df = df_raw[df_raw["TYPE"]=="CE"].copy().rename(columns={
+        ce_raw = df_raw[df_raw["TYPE"]=="CE"].copy()
+        pe_raw = df_raw[df_raw["TYPE"]=="PE"].copy()
+        df = ce_raw.rename(columns={
             "STRIKE":"near_strike","BID":"near_bid","ASK":"near_ask",
             "LTP":"near_ltp","VOLUME":"near_vol",
             "NEAR_THETA":"near_theta","FAR_THETA":"far_theta",
@@ -431,8 +507,15 @@ def _run_all_strategies() -> list:
             "NEAR_DELTA":"near_delta","FAR_DELTA":"far_delta",
             "FAR_LEG":"far_prem","NEAR_LEG":"near_prem",
         })
-        df["straddle"]    = df["near_bid"] * 2
-        df["far_strike"]  = df["near_strike"]
+        df["far_strike"] = df["near_strike"]
+        # Real straddle = CE_ltp + PE_ltp (merge PE data on strike)
+        if not pe_raw.empty:
+            pe_ltp = pe_raw[["STRIKE","LTP","BID"]].rename(
+                columns={"STRIKE":"near_strike","LTP":"pe_ltp","BID":"pe_bid"})
+            df = df.merge(pe_ltp, on="near_strike", how="left")
+            df["straddle"] = df["near_ltp"].fillna(0) + df["pe_ltp"].fillna(0)
+        else:
+            df["straddle"] = df["near_ltp"].fillna(0) * 2  # fallback
         spot = _latest_indices_map.get("NIFTY",{}).get("ltp",0)
         vix  = _latest_indices_map.get("VIX",{}).get("ltp")
         if not spot: return []
@@ -565,32 +648,93 @@ def _nsefetch(url: str, timeout: int = 8) -> dict:
     except Exception:
         return {}
 
+def _fetch_yahoo_indices() -> dict:
+    """
+    Fetch NSE index prices via Yahoo Finance HTTP API — no library, no API key.
+    Works even when NSE scraping is blocked.
+    """
+    _YF = {
+        "NIFTY":     "%5ENSEI",
+        "BANKNIFTY": "%5ENSEBANK",
+        "FINNIFTY":  "%5ECNXFINANCE",
+        "VIX":       "%5EINDIAVIX",
+    }
+    result = {}
+    hdr = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    for label, ticker in _YF.items():
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d"
+            r   = requests.get(url, headers=hdr, timeout=6)
+            if r.status_code != 200:
+                continue
+            meta  = r.json()["chart"]["result"][0]["meta"]
+            ltp   = float(meta.get("regularMarketPrice") or meta.get("previousClose") or 0)
+            prev  = float(meta.get("previousClose") or ltp)
+            ch    = round(ltp - prev, 2)
+            chp   = round((ch / prev * 100) if prev else 0, 2)
+            high  = float(meta.get("regularMarketDayHigh") or ltp)
+            low   = float(meta.get("regularMarketDayLow")  or ltp)
+            result[label] = {"label": label, "ltp": round(ltp, 2),
+                             "change_pct": chp, "change": ch,
+                             "high": high, "low": low, "_ts": int(time.time()),
+                             "_src": "yahoo"}
+        except Exception:
+            continue
+    if result:
+        n = result.get("NIFTY", {}).get("ltp", "?")
+        b = result.get("BANKNIFTY", {}).get("ltp", "?")
+        logging.info(f"[Yahoo] Indices OK — NIFTY={n} BANKNIFTY={b}")
+    return result
+
+
 def _fetch_live_indices():
-    BASES = {"NIFTY":24500,"BANKNIFTY":53000,"FINNIFTY":23000,"VIX":14.5,"MIDCAP":52000,"IT":37000}
     name_map = {"NIFTY 50":"NIFTY","NIFTY BANK":"BANKNIFTY","NIFTY FIN SERVICE":"FINNIFTY",
                 "INDIA VIX":"VIX","NIFTY MIDCAP 100":"MIDCAP","NIFTY IT":"IT"}
     result = []
+
+    # ── Source 1: Dhan WebSocket tick store (real-time, already live) ──
+    # No HTTP call — reads from in-memory ticks already received
     try:
-        data = _nsefetch("https://www.nseindia.com/api/allIndices")
-        fetched = {}
-        for item in data.get("data", []):
-            nm = item.get("index", "")
-            if nm in name_map:
-                lbl = name_map[nm]; ltp = float(item.get("last") or 0)
-                fetched[lbl] = {"label":lbl,"ltp":round(ltp,2),
-                                "change_pct":round(float(item.get("percentChange") or 0),2),
-                                "change":float(item.get("change") or 0),
-                                "high":float(item.get("high") or ltp),
-                                "low":float(item.get("low") or ltp),"_ts":int(time.time())}
-        if fetched:
-            result = [fetched[l] for l in IDX_ORDER if l in fetched]
+        from algo.dhan_ticker import get_index_prices
+        ws = get_index_prices()
+        if ws:
+            result = [ws[l] for l in IDX_ORDER if l in ws]
     except Exception:
         pass
+
+    # ── Source 2: NSE via nsepython (free, cookie-based) ──────────────
     if not result:
-        # Return last known values if available — no random data
+        try:
+            data = _nsefetch("https://www.nseindia.com/api/allIndices")
+            fetched = {}
+            for item in data.get("data", []):
+                nm = item.get("index", "")
+                if nm in name_map:
+                    lbl = name_map[nm]; ltp = float(item.get("last") or 0)
+                    if ltp:
+                        fetched[lbl] = {"label":lbl,"ltp":round(ltp,2),
+                                        "change_pct":round(float(item.get("percentChange") or 0),2),
+                                        "change":float(item.get("change") or 0),
+                                        "high":float(item.get("high") or ltp),
+                                        "low":float(item.get("low") or ltp),
+                                        "_ts":int(time.time()),"_src":"nse"}
+            if fetched:
+                result = [fetched[l] for l in IDX_ORDER if l in fetched]
+        except Exception:
+            pass
+
+    # ── Source 3: Yahoo Finance (direct HTTP, no library, never blocked) ─
+    if not result:
+        try:
+            yf = _fetch_yahoo_indices()
+            if yf:
+                result = [yf[l] for l in IDX_ORDER if l in yf]
+        except Exception:
+            pass
+
+    # ── Source 4: last known cached values ────────────────────────────
+    if not result:
         result = [v for v in _latest_indices_map.values()] if _latest_indices_map else []
-        if not result:
-            return []   # Return empty — dashboard shows "Loading..." until real data arrives
     return result
 
 def generate_equity_signals(top_n=8):
@@ -665,6 +809,13 @@ try:
 except ImportError:
     _TG_OK = False
 
+# ── Razorpay (lazy init) ──────────────────────────────────────────────────
+try:
+    from razorpay_handler import create_order as _rzp_create_order, verify_payment as _rzp_verify, activate_plan as _rzp_activate
+    _RZP_OK = True
+except ImportError:
+    _RZP_OK = False
+
 def _tg_send(signal: dict) -> None:
     if not _TG_OK: return
     try: _get_tg_bot().send_signal(signal)
@@ -679,6 +830,7 @@ async def signal_loop():
     - Every signal is validated before reaching the frontend
     """
     cycle = 0
+    _gold_last_run: float = 0.0   # epoch time of last Gold signal fetch
     logging.info("[SignalLoop] Starting — DEMO_MODE=%s", _DEMO_MODE)
 
     # Broadcast initial state so frontend knows we're alive
@@ -708,7 +860,42 @@ async def signal_loop():
                     "message": "Market closed — NSE trading resumes Mon-Fri 9:15 AM IST",
                     "timestamp": _ist_now().isoformat(),
                 })
+            # Gold trades 24/7 — run even when NSE is closed (every 5 min)
+            if time.time() - _gold_last_run >= 300:
+                _gold_last_run = time.time()
+                try:
+                    from algo.delta_connector import get_ohlcv, get_gold_ticker
+                    from algo.gold_strategy   import generate_gold_signals
+                    c5  = await asyncio.get_event_loop().run_in_executor(None, lambda: get_ohlcv("XAUUSD","5m",100))
+                    c15 = await asyncio.get_event_loop().run_in_executor(None, lambda: get_ohlcv("XAUUSD","15m",60))
+                    if c5:
+                        gold_sigs = generate_gold_signals(c5, c15 or None)
+                        for gs in gold_sigs:
+                            if _validate_signal(gs):
+                                _db["signals"].append(gs)
+                                await broadcaster.broadcast({"type": "signal", "data": gs})
+                        if gold_sigs:
+                            _db["signals"] = _db["signals"][-300:]
+                            logging.info(f"[Gold] {len(gold_sigs)} signal(s) generated")
+                except Exception as _ge:
+                    logging.debug(f"[Gold] {_ge}")
             continue
+
+        # ── Sync _NSE_OK with NSEFetcher circuit breaker (dynamic recovery) ──
+        global _NSE_OK
+        if _loader is not None:
+            try:
+                _fetcher_inst = _loader._get_fetcher()
+                fetcher_ok = (_fetcher_inst._fail_count < 3
+                              or time.time() >= _fetcher_inst._backoff_until)
+                if fetcher_ok and not _NSE_OK:
+                    _NSE_OK = True
+                    logging.info("[NSE] Feed recovered — resuming signal generation")
+                elif not fetcher_ok and _NSE_OK:
+                    _NSE_OK = False
+                    logging.warning(f"[NSE] Circuit breaker active (fail={_fetcher_inst._fail_count}) — pausing until backoff clears")
+            except Exception:
+                pass
 
         # ── LIVE MARKET: generate real signals ───────────────────────────
 
@@ -743,6 +930,26 @@ async def signal_loop():
                 _db["signals"] = _db["signals"][-300:]
                 logging.info(f"[MultiStrat] {len(valid_ms)} validated signals")
 
+        # Gold (XAUUSD via Delta Exchange) — every 5 min (100 cycles × 3s), 24/7
+        if time.time() - _gold_last_run >= 300:
+            _gold_last_run = time.time()
+            try:
+                from algo.delta_connector import get_ohlcv
+                from algo.gold_strategy   import generate_gold_signals
+                c5  = await asyncio.get_event_loop().run_in_executor(None, lambda: get_ohlcv("XAUUSD","5m",100))
+                c15 = await asyncio.get_event_loop().run_in_executor(None, lambda: get_ohlcv("XAUUSD","15m",60))
+                if c5:
+                    gold_sigs = generate_gold_signals(c5, c15 or None)
+                    for gs in gold_sigs:
+                        if _validate_signal(gs):
+                            _db["signals"].append(gs)
+                            await broadcaster.broadcast({"type": "signal", "data": gs})
+                    if gold_sigs:
+                        _db["signals"] = _db["signals"][-300:]
+                        logging.info(f"[Gold] {len(gold_sigs)} signal(s) generated")
+            except Exception as _ge:
+                logging.debug(f"[Gold] {_ge}")
+
         # PCR Contrarian — every 90s (30 cycles × 3s)
         if cycle % 30 == 0 and _PCR_OK:
             vix = _latest_indices_map.get("VIX", {}).get("ltp")
@@ -769,6 +976,9 @@ async def signal_loop():
                 "signals_n": len(_db["signals"]),
                 "timestamp": datetime.now().isoformat(),
             })
+        # Persist signals to disk every 30s so post-close restarts retain today's data
+        if cycle % 10 == 0 and _db["signals"]:
+            _persist_signals()
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
@@ -777,6 +987,7 @@ async def lifespan(app:FastAPI):
             "password":hash_password("demo123"),"plan":"monthly","billing":"monthly",
             "joined":str(date.today()),"daily_target":50000,"plan_expiry":str(date.today()+timedelta(days=30))}
     logging.info("AlgoTrade v3.4 started — http://localhost:8000")
+    _load_today_signals()
     if _DHAN_OK:
         # BANKNIFTY spot + near/far CE/PE tokens (standard Dhan security_ids)
         start_dhan_ticker([260105, 260106])
@@ -837,6 +1048,133 @@ def signals_health():
         "warning":          None if _NSE_OK else "NSE connection unavailable — no signals being generated",
     }
 
+@app.get("/signals/audit")
+def signals_audit():
+    """
+    Morning system health check.
+    Tells you exactly what is working, what isn't, and how many real signals
+    each strategy produced today. Use this at 9:15 AM to verify the feed is live.
+    """
+    now = _ist_now()
+    mkt = _is_market_open()
+    today_sigs = [s for s in _db["signals"]
+                  if s.get("timestamp","")[:10] == now.strftime("%Y-%m-%d")]
+
+    # Per-strategy counts (live only)
+    strat_counts: Dict[str, int] = {}
+    strat_last:   Dict[str, str] = {}
+    for s in today_sigs:
+        if not (s.get("source","").startswith("NSE") or s.get("is_live")): continue
+        strat = s.get("strategy","UNKNOWN")
+        strat_counts[strat] = strat_counts.get(strat, 0) + 1
+        ts_s = s.get("timestamp","")
+        if ts_s > strat_last.get(strat,""):
+            strat_last[strat] = ts_s
+
+    # NSEFetcher circuit breaker state
+    fetcher_status = "UNKNOWN"
+    fetcher_fail   = 0
+    fetcher_backoff_secs = 0
+    if _loader is not None:
+        try:
+            f = _loader._get_fetcher()
+            fetcher_fail = f._fail_count
+            remaining = max(0, f._backoff_until - time.time())
+            fetcher_backoff_secs = int(remaining)
+            if f._fail_count == 0:
+                fetcher_status = "OK"
+            elif f._fail_count < 3:
+                fetcher_status = f"WARN ({f._fail_count} consecutive fails)"
+            else:
+                fetcher_status = f"CIRCUIT_OPEN — backoff {int(remaining)}s remaining"
+        except Exception as e:
+            fetcher_status = f"ERROR: {e}"
+
+    live_today   = sum(1 for s in today_sigs if s.get("is_live") or s.get("source","").startswith("NSE"))
+    last_signal  = today_sigs[-1].get("timestamp") if today_sigs else None
+
+    strategies_expected = ["S1 CALENDAR","S2 IRON CONDOR","S3 SHORT STRADDLE",
+                           "S4 MOMENTUM","S5 PCR CONTRARIAN","EQ EQUITY",
+                           "S1 GOLD MOMENTUM","S2 GOLD BREAKOUT","S3 GOLD MEAN REVERSION"]
+    strategies_status = {}
+    for strat in strategies_expected:
+        cnt = strat_counts.get(strat, 0)
+        last = strat_last.get(strat)
+        is_gold = "GOLD" in strat
+        if cnt > 0:
+            strategies_status[strat] = {"status": "PRODUCING", "count": cnt, "last_signal": last}
+        elif is_gold:
+            # Gold runs 24/7 — market_open flag doesn't apply
+            strategies_status[strat] = {"status": "NO_SIGNALS_YET", "count": 0, "last_signal": None}
+        elif mkt:
+            strategies_status[strat] = {"status": "NO_SIGNALS_YET", "count": 0, "last_signal": None}
+        else:
+            strategies_status[strat] = {"status": "MARKET_CLOSED", "count": 0, "last_signal": last}
+
+    # Equity signals separately
+    eq_today = [s for s in today_sigs if s.get("market") == "EQUITY"]
+    strategies_status["EQ EQUITY"] = {
+        "status": "PRODUCING" if eq_today else ("NO_SIGNALS_YET" if mkt else "MARKET_CLOSED"),
+        "count": len(eq_today),
+        "last_signal": eq_today[-1].get("timestamp") if eq_today else None,
+    }
+
+    overall = ("ALL_OK" if all(v["status"]=="PRODUCING" for v in strategies_status.values())
+               else "PARTIAL" if live_today > 0
+               else "DOWN")
+
+    # Gold feed check (Delta Exchange — no auth needed for prices)
+    gold_feed_ok = False
+    gold_feed_status = "NOT_CHECKED"
+    gold_sigs_today = [s for s in today_sigs if s.get("market") == "COMMODITY"]
+    try:
+        from algo.delta_connector import get_gold_ticker
+        tk = get_gold_ticker()
+        gold_feed_ok = bool(tk and tk.get("ltp"))
+        gold_feed_status = f"OK — XAUUSD ${tk.get('ltp',0):,.0f}" if gold_feed_ok else "UNAVAILABLE"
+    except Exception as _gfe:
+        gold_feed_status = f"ERROR: {_gfe}"
+
+    return {
+        "timestamp":         now.isoformat(),
+        "ist_time":          now.strftime("%H:%M IST"),
+        "market_open":       mkt,
+        "overall_status":    overall,
+        "nse_feed": {
+            "status":        fetcher_status,
+            "consecutive_fails": fetcher_fail,
+            "backoff_remaining_secs": fetcher_backoff_secs,
+            "nse_ok_flag":   _NSE_OK,
+        },
+        "dhan_feed": {
+            "status":        "OK" if _DHAN_OK else "NOT_CONNECTED",
+            "connected":     _DHAN_OK,
+        },
+        "pcr_feed": {
+            "status":        "OK" if _PCR_OK else "NOT_LOADED",
+            "connected":     _PCR_OK,
+        },
+        "gold_feed": {
+            "status":    gold_feed_status,
+            "connected": gold_feed_ok,
+            "signals_today": len(gold_sigs_today),
+            "note":      "24/7 — runs outside NSE market hours too",
+        },
+        "signals_today": {
+            "total":         len(today_sigs),
+            "live":          live_today,
+            "last_signal":   last_signal,
+        },
+        "strategies":        strategies_status,
+        "action_required":   (
+            "Start backend before 9:15 AM IST" if not mkt and live_today == 0
+            else "NSE feed down — check network / NSE rate limits" if not _NSE_OK and mkt
+            else "OK — signals flowing" if live_today > 0
+            else "Waiting for first signal of the day" if mkt
+            else "Review today's signals above"
+        ),
+    }
+
 @app.get("/signals")
 def signals_shorthand(limit:int=50,user=Depends(get_optional_user)):
     # FIXED: expose nse_live not xls_live to frontend
@@ -860,6 +1198,43 @@ def equity_signals(top:int=10,user=Depends(get_optional_user)):
     signals=generate_equity_signals(top_n=top)
     return {"signals":signals,"count":len(signals),"timestamp":datetime.now().isoformat()}
 
+@app.get("/signals/gold")
+def gold_signals_endpoint(user=Depends(get_optional_user)):
+    """Live Gold signals from Delta Exchange (XAUUSD). No auth required for price data."""
+    try:
+        from algo.delta_connector import get_ohlcv, get_gold_ticker
+        from algo.gold_strategy   import generate_gold_signals
+        candles_5m  = get_ohlcv("XAUUSD", "5m",  limit=100)
+        candles_15m = get_ohlcv("XAUUSD", "15m", limit=60)
+        ticker = get_gold_ticker()
+        if not candles_5m:
+            return {"signals": [], "count": 0, "gold_price": None,
+                    "message": "Could not fetch Gold data from Delta Exchange",
+                    "timestamp": datetime.now().isoformat()}
+        signals = generate_gold_signals(candles_5m, candles_15m or None)
+        return {
+            "signals":    signals,
+            "count":      len(signals),
+            "gold_price": ticker.get("ltp") if ticker else candles_5m[-1]["close"],
+            "gold_change_pct": ticker.get("change_pct", 0) if ticker else 0,
+            "timestamp":  datetime.now().isoformat(),
+            "source":     "delta_exchange_india",
+        }
+    except Exception as e:
+        return {"signals": [], "count": 0, "error": str(e),
+                "message": "Delta Exchange not connected — add DELTA_API_KEY to .env",
+                "timestamp": datetime.now().isoformat()}
+
+@app.get("/gold/ticker")
+def gold_ticker_endpoint():
+    """Live Gold price from Delta Exchange."""
+    try:
+        from algo.delta_connector import get_gold_ticker
+        t = get_gold_ticker()
+        return t if t else {"error": "Could not fetch Gold ticker"}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.post("/signals/fo_ingest")
 async def fo_ingest(req:FoSignalIngest):
     signal={"timestamp":datetime.now().isoformat(),"source":req.source or "calendar_algo",
@@ -876,6 +1251,7 @@ async def fo_ingest(req:FoSignalIngest):
             "far_bid":req.far_bid,"buy_far_at":req.buy_far_at,
             "sell_near_at":req.sell_near_at,"event_type":req.event_type or "signal"}
     _db["signals"].append(signal); _db["signals"]=_db["signals"][-300:]
+    _persist_signals()
     await broadcaster.broadcast({"type":"signal","data":signal})
     return {"ok":True,"signal":signal}
 
@@ -1188,6 +1564,78 @@ def upgrade_plan(req:UpgradeRequest,user=Depends(get_current_user)):
     return {"message":f"Upgraded to {req.plan} ({req.billing})","plan":req.plan,
             "billing":req.billing,"price":price,"expiry":expiry,"tier":TIERS[req.plan]}
 
+# ── Razorpay Payment Flow ─────────────────────────────────────────────────
+class RazorpayOrderReq(BaseModel):
+    plan: str
+    billing: str = "monthly"
+
+class RazorpayVerifyReq(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+    plan: str
+    billing: str = "monthly"
+
+@app.post("/subscription/create-order")
+def razorpay_create_order(req: RazorpayOrderReq, user=Depends(get_current_user)):
+    """Step 1: Create a Razorpay order. Returns order_id + key_id for checkout."""
+    if not _RZP_OK:
+        raise HTTPException(503, "Razorpay handler not available")
+    try:
+        order = _rzp_create_order(req.plan, req.billing, user["email"])
+        return order
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Order creation failed: {e}")
+
+@app.post("/subscription/verify-payment")
+def razorpay_verify_payment(req: RazorpayVerifyReq, user=Depends(get_current_user)):
+    """Step 2: Verify Razorpay signature and activate plan."""
+    if not _RZP_OK:
+        raise HTTPException(503, "Razorpay handler not available")
+    rzp_key = os.environ.get("RAZORPAY_KEY_SECRET","").strip()
+    if rzp_key:
+        # Live mode: verify signature
+        ok = _rzp_verify(req.razorpay_order_id, req.razorpay_payment_id, req.razorpay_signature)
+        if not ok:
+            raise HTTPException(400, "Payment signature verification failed")
+    # Activate plan
+    u = _db["users"].get(user["email"], {})
+    updated = _rzp_activate(u, req.plan, req.billing)
+    _db["users"][user["email"]].update(updated)
+    return {"success": True, "plan": req.plan, "billing": req.billing,
+            "expiry": updated.get("plan_expiry"), "message": f"Plan activated: {req.plan} ({req.billing})"}
+
+@app.get("/subscription/razorpay-status")
+def razorpay_status():
+    """Check if Razorpay is configured (for frontend to show/hide payment UI)."""
+    key_id = os.environ.get("RAZORPAY_KEY_ID","").strip()
+    return {
+        "configured": bool(key_id),
+        "test_mode": key_id.startswith("rzp_test_") if key_id else True,
+        "key_id": key_id if key_id else None,
+    }
+
+# ── Telegram Status & Test ────────────────────────────────────────────────
+@app.get("/telegram/status")
+def telegram_status():
+    token = os.environ.get("TELEGRAM_BOT_TOKEN","").strip()
+    chat  = os.environ.get("TELEGRAM_CHAT_ID","").strip()
+    return {"configured": bool(token and chat), "has_token": bool(token), "has_chat_id": bool(chat)}
+
+@app.post("/telegram/test")
+def telegram_test(user=Depends(get_current_user)):
+    if not _TG_OK:
+        raise HTTPException(503, "Telegram module not loaded")
+    bot = _get_tg_bot()
+    if not bot._enabled:
+        raise HTTPException(400, "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env, then restart backend")
+    ok = bot.test_connection()
+    if ok:
+        return {"success": True, "message": "Test message sent to Telegram ✅"}
+    raise HTTPException(500, "Failed to send message — check token and chat_id")
+
 # ── Analytics ─────────────────────────────────────────────────────────────
 @app.get("/analytics/pnl")
 def analytics_pnl(user=Depends(get_current_user)):
@@ -1204,6 +1652,82 @@ def analytics_pnl(user=Depends(get_current_user)):
         bs["total_pnl"]+=t.get("pnl_inr") or 0
     return {"pnl":sorted(by_date.values(),key=lambda x:x["date"]),"by_strategy":by_strat,
             "total_pnl":sum(pnls),"total_trades":len(trades),"winning_trades":len(wins)}
+
+
+# ── Signal accuracy tracker ───────────────────────────────────────────────
+# Stores: {signal_id: {signal, spot_at_signal, outcome_spot, outcome_time, result}}
+_accuracy_db: Dict[str, dict] = {}
+
+@app.post("/signals/record-outcome")
+async def record_signal_outcome(data: dict):
+    """
+    Record the market outcome after a signal.
+    Call this from the frontend when a signal's direction can be checked
+    against actual price movement (e.g. 30 mins after signal time).
+    Body: {signal_id, spot_at_signal, outcome_spot, signal_direction}
+    """
+    sig_id   = data.get("signal_id","")
+    s_spot   = float(data.get("spot_at_signal", 0) or 0)
+    o_spot   = float(data.get("outcome_spot", 0) or 0)
+    dirn     = str(data.get("signal_direction","")).upper()
+    strategy = str(data.get("strategy",""))
+    if not sig_id or not s_spot or not o_spot:
+        raise HTTPException(400, "signal_id, spot_at_signal, outcome_spot required")
+    move = o_spot - s_spot
+    if   dirn in ("LONG","BUY","BULL"):  correct = move > 0
+    elif dirn in ("SHORT","SELL","BEAR"): correct = move < 0
+    else:                                 correct = None
+    _accuracy_db[sig_id] = {
+        "signal_id":      sig_id,
+        "strategy":       strategy,
+        "direction":      dirn,
+        "spot_at_signal": s_spot,
+        "outcome_spot":   o_spot,
+        "move_pts":       round(move, 2),
+        "correct":        correct,
+        "recorded_at":    _ist_now().isoformat(),
+    }
+    return {"ok": True, "correct": correct, "move_pts": round(move, 2)}
+
+@app.get("/signals/accuracy")
+def signal_accuracy():
+    """
+    Returns real signal accuracy from recorded outcomes.
+    This is YOUR actual data — zero defaults, zero fake numbers.
+    The more outcomes you record, the more meaningful this becomes.
+    """
+    records = list(_accuracy_db.values())
+    if not records:
+        return {
+            "message": "No outcomes recorded yet. Accuracy builds as you record signal results.",
+            "total_recorded": 0,
+            "by_strategy": {},
+        }
+    by_strategy: Dict[str, dict] = {}
+    for r in records:
+        strat = r.get("strategy","UNKNOWN")
+        if strat not in by_strategy:
+            by_strategy[strat] = {"total": 0, "correct": 0, "wrong": 0, "neutral": 0,
+                                   "total_pts": 0.0}
+        bs = by_strategy[strat]
+        bs["total"]     += 1
+        bs["total_pts"] += r.get("move_pts", 0)
+        if r.get("correct") is True:    bs["correct"]  += 1
+        elif r.get("correct") is False: bs["wrong"]    += 1
+        else:                           bs["neutral"]  += 1
+    for strat, bs in by_strategy.items():
+        t = bs["total"]
+        bs["win_rate_pct"]  = round(bs["correct"] / t * 100, 1) if t else 0
+        bs["avg_move_pts"]  = round(bs["total_pts"] / t, 2)     if t else 0
+    total   = len(records)
+    correct = sum(1 for r in records if r.get("correct") is True)
+    return {
+        "total_recorded":   total,
+        "overall_win_rate": round(correct / total * 100, 1) if total else 0,
+        "by_strategy":      by_strategy,
+        "raw_records":      sorted(records, key=lambda x: x.get("recorded_at",""), reverse=True)[:50],
+        "note": f"Based on {total} real outcomes — this is ground truth, not backtested.",
+    }
 
 
 @app.get("/analytics/backtest-stats")
@@ -1468,14 +1992,11 @@ def broker_status(user=Depends(get_optional_user)):
         return {"ok": False, "broker": "none", "message": "broker.py not loaded"}
     b = _get_broker()
     btype = b.__class__.__name__.replace("Broker", "").lower()
-    upstox_configured = bool(os.environ.get("UPSTOX_API_KEY"))
-    upstox_authed     = bool(os.environ.get("UPSTOX_ACCESS_TOKEN"))
     return {
         "ok": b.is_ready, "broker": btype, "paper": btype == "paper",
-        "available": {"dhan":   bool(os.environ.get("DHAN_ACCESS_TOKEN")),
-                      "kite":   bool(os.environ.get("KITE_ACCESS_TOKEN")),
-                      "upstox": upstox_authed},
-        "upstox_needs_auth": upstox_configured and not upstox_authed,
+        "available": {"dhan": bool(os.environ.get("DHAN_ACCESS_TOKEN")),
+                      "kite": bool(os.environ.get("KITE_ACCESS_TOKEN"))},
+        "upstox_needs_auth": False,  # Upstox disabled
     }
 
 @app.get("/broker/funds")
@@ -1494,7 +2015,9 @@ def broker_orders_list(user=Depends(get_current_user)):
     return {"orders": _get_broker().get_orders()}
 
 @app.get("/broker/upstox-auth")
-def upstox_auth_redirect():
+def upstox_auth_redirect():  # Upstox disabled — not in use
+    raise HTTPException(410, "Upstox integration is not enabled on this platform")
+async def _upstox_auth_redirect_disabled():
     """Step 1: Open this URL in browser to authenticate Upstox."""
     if not _BROKER_OK:
         raise HTTPException(503, "broker.py not loaded")
@@ -1619,6 +2142,80 @@ def broker_switch(broker_name: str, user=Depends(get_current_user)):
             "active": b.__class__.__name__,
             "message": f"Switched to {broker_name}" + (" (falling back to paper — credentials missing)" if not b.is_ready else "")}
 
+@app.post("/dhan/token")
+def update_dhan_token(req: DhanTokenRequest, user=Depends(get_current_user)):
+    """
+    Hot-update Dhan credentials without restarting the server.
+    Saves to data/dhan_token.json AND reloads live env + ticker.
+    """
+    global _DHAN_OK
+    if not req.client_id.strip() or not req.access_token.strip():
+        raise HTTPException(400, "client_id and access_token are required")
+    try:
+        from algo.dhan_auth import save_token_manual, validate_token
+        save_token_manual(req.client_id.strip(), req.access_token.strip())
+        os.environ["DHAN_CLIENT_ID"]    = req.client_id.strip()
+        os.environ["DHAN_ACCESS_TOKEN"] = req.access_token.strip()
+        valid = validate_token()
+        _DHAN_OK = valid
+        # Re-start ticker with updated credentials
+        if valid:
+            try:
+                from algo.dhan_ticker import start_dhan_ticker
+                start_dhan_ticker([260105, 260106])
+            except Exception:
+                pass
+        return {"ok": True, "valid": valid,
+                "client_id": req.client_id.strip(),
+                "message": "Token saved and validated ✓" if valid else "Token saved but validation failed — may be expired"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to save token: {e}")
+
+@app.post("/nse/reconnect")
+def nse_reconnect(user=Depends(get_current_user)):
+    """Force-reset the NSE session and circuit breaker."""
+    global _NSE_OK
+    try:
+        if _loader:
+            fetcher = _loader._get_fetcher()
+            fetcher._fail_count    = 0
+            fetcher._backoff_until = 0
+            fetcher._init_session()
+            vix = fetcher.get_vix()
+            _NSE_OK = vix is not None
+            return {"ok": _NSE_OK, "vix": vix,
+                    "message": f"NSE reconnected -- VIX {vix}" if vix else "Session reset but NSE unavailable"}
+        return {"ok": False, "message": "data_provider not loaded"}
+    except Exception as e:
+        return {"ok": False, "message": str(e)}
+
+@app.get("/dhan/status")
+def dhan_status():
+    """Check current Dhan token status."""
+    token = os.environ.get("DHAN_ACCESS_TOKEN", "")
+    client_id = os.environ.get("DHAN_CLIENT_ID", "")
+    expiry = ""
+    _tf = Path(__file__).parent.parent.parent / "data" / "dhan_token.json"
+    if not _tf.exists():
+        _tf = Path(__file__).parent / "data" / "dhan_token.json"
+    if _tf.exists():
+        try:
+            _d = json.loads(_tf.read_text())
+            if not token:
+                token     = _d.get("access_token", "")
+                client_id = _d.get("client_id", "")
+            expiry = _d.get("expiry", "")
+        except Exception:
+            pass
+    expired = False
+    if expiry:
+        try:
+            expired = datetime.fromisoformat(expiry) < datetime.now()
+        except Exception:
+            pass
+    return {"has_token": bool(token), "client_id": client_id,
+            "expiry": expiry, "expired": expired, "dhan_live": _DHAN_OK}
+
 @app.get("/health")
 def health_check():
     return {"status":"ok","version":"3.4.0","users":len(_db["users"]),
@@ -1629,10 +2226,9 @@ def health_check():
             "pcr_live":_PCR_OK,"tl_live":_TL_OK,"timestamp":datetime.now().isoformat()}
 
 @app.get("/")
-def root(): return {"message":"AlgoTrade API v3.4 — NSE Direct API","docs":"/docs","health":"/health"}
+def root(): return {"message":"AlgoTrade API v3.4 -- NSE Direct + Dhan + Yahoo","docs":"/docs","health":"/health"}
 
 if __name__ == "__main__":
-    # Suppress noisy access log lines for WS and health endpoints
     import logging as _uvlog
     class _QuietFilter(logging.Filter):
         _SKIP = {"/health", "/ws/signals", "/indices", "/favicon"}

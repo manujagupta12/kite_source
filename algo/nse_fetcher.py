@@ -28,13 +28,22 @@ _OC_EQUITY   = "/api/option-chain-equities?symbol={sym}"
 _ALL_INDICES  = "/api/allIndices"
 
 _HEADERS = {
-    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept":          "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Language": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br",
     "Referer":         "https://www.nseindia.com/option-chain",
+    "Origin":          "https://www.nseindia.com",
     "Connection":      "keep-alive",
     "Cache-Control":   "no-cache",
+    "Pragma":          "no-cache",
+    "sec-ch-ua":       '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Sec-Fetch-Dest":  "empty",
+    "Sec-Fetch-Mode":  "cors",
+    "Sec-Fetch-Site":  "same-origin",
+    "X-Requested-With": "XMLHttpRequest",
 }
 
 # Index symbols use the indices endpoint; everything else uses equities
@@ -68,20 +77,23 @@ class NSEFetcher:
     # ── Session management ────────────────────────────────────
 
     def _init_session(self):
-        """Create a fresh session and warm up NSE cookies."""
+        """Create a fresh session and warm up NSE cookies. Does NOT reset fail_count."""
         s = requests.Session()
         s.headers.update(_HEADERS)
         try:
-            s.get(_BASE, timeout=8)                                      # home page
+            s.get(_BASE, timeout=8)
             time.sleep(0.3)
-            s.get(_BASE + "/option-chain", timeout=8)                   # option chain page
+            s.get(_BASE + "/option-chain", timeout=8)
             time.sleep(0.3)
-            s.get(_BASE + _ALL_INDICES, timeout=8)                       # allIndices
+            s.get(_BASE + _ALL_INDICES, timeout=8)
             time.sleep(0.3)
+            if s.cookies:
+                print(f"[NSEFetcher] Session initialised (cookies: {len(s.cookies)})")
         except Exception as e:
             print(f"[NSEFetcher] Session init warning: {e}")
         self._session = s
         self._session_born = time.time()
+        # NOTE: do NOT reset _fail_count here — that breaks the circuit breaker
 
     def _ensure_session(self):
         """Refresh session if it's stale (older than refresh_interval)."""
@@ -350,7 +362,7 @@ class NSEFetcher:
         if self._fail_count == 1:
             print(f"[NSEFetcher] Option chain unavailable for {sym} — NSE may be blocking. Retrying in 5 min.")
         if self._fail_count >= 3:
-            self._backoff_until = time.time() + 300
+            self._backoff_until = time.time() + 300  # 5 min backoff — stop hammering NSE
         return None
 
 
@@ -358,32 +370,22 @@ class NSEFetcher:
 _fetcher: Optional[NSEFetcher] = None
 
 def get_fetcher() -> NSEFetcher:
-    """Return shared singleton NSEFetcher instance."""
+    '''Return shared singleton NSEFetcher instance.'''
     global _fetcher
     if _fetcher is None:
         _fetcher = NSEFetcher()
     return _fetcher
 
 
-# ── Quick test ────────────────────────────────────────────────
+# ── Quick test ──────────────────────────────────────────────
 if __name__ == "__main__":
     print("[TEST] NSEFetcher\n")
     f = NSEFetcher()
-
     vix = f.get_vix()
     print(f"  VIX: {vix}")
-
     expiries = f.get_expiry_dates("BANKNIFTY")
     print(f"  BANKNIFTY expiries: {expiries[:4]}")
-
     if expiries:
-        atm = f.get_atm_strike("BANKNIFTY", expiries[0])
-        print(f"  ATM: {atm}")
-
-        pcr = f.get_pcr("BANKNIFTY", expiries[0])
-        print(f"  PCR: {pcr}")
-
-        if len(expiries) >= 2 and atm:
-            legs = f.get_calendar_legs("BANKNIFTY", expiries[0], expiries[1], atm)
-            ce = legs.get("CE", {})
-            print(f"  Calendar CE {atm}: far_bid={ce.get('far_bid')} near_ask={ce.get('near_ask')} spread={ce.get('spread')}")
+        chain = f.get_option_chain("BANKNIFTY", expiries[0])
+        print(f"  Rows: {len(chain.get('chain', {}))}")
+        print(f"  Spot: {chain.get('underlying')}")
