@@ -1456,6 +1456,57 @@ function RiskFooter(){
   </footer>);
 }
 
+function Login({onLogin}){
+  const [mode,setMode]=useState("login");
+  const [name,setName]=useState("");
+  const [email,setEmail]=useState("");
+  const [pass,setPass]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+
+  const submit=async(e)=>{
+    e.preventDefault();
+    setErr("");setLoading(true);
+    try{
+      const path=mode==="login"?"/auth/login":"/auth/register";
+      const body=mode==="login"?{email,password:pass}:{name,email,password:pass};
+      const r=await fetch("/api"+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.detail||"Request failed");
+      localStorage.setItem("tok",d.token);
+      onLogin(d.user||{tok:true});
+    }catch(ex){setErr(ex.message);}
+    finally{setLoading(false);}
+  };
+
+  return(<div className="login-wrap">
+    <div className="login-card">
+      <div className="l-logo">ALGOTRADE</div>
+      <div className="l-sub">NSE F&amp;O SIGNAL PLATFORM v3.0</div>
+      <form onSubmit={submit}>
+        {err&&<div className="err-box">{err}</div>}
+        {mode==="signup"&&(<>
+          <label className="l-lbl">Name</label>
+          <input className="l-inp" value={name} onChange={e=>setName(e.target.value)} placeholder="Your name" required autoFocus/>
+        </>)}
+        <label className="l-lbl">Email</label>
+        <input className="l-inp" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" required autoFocus={mode==="login"}/>
+        <label className="l-lbl">Password</label>
+        <input className="l-inp" type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" required/>
+        <button className="l-btn" type="submit" disabled={loading}>
+          {loading?(mode==="login"?"Signing in…":"Creating account…"):(mode==="login"?"Sign In":"Create Account")}
+        </button>
+      </form>
+      <div className="l-demo">
+        {mode==="login"?"Don't have an account? ":"Already have an account? "}
+        <span style={{color:"var(--acc)",cursor:"pointer",textDecoration:"underline"}} onClick={()=>{setMode(m=>m==="login"?"signup":"login");setErr("");}}>
+          {mode==="login"?"Sign up":"Sign in"}
+        </span>
+      </div>
+    </div>
+  </div>);
+}
+
 function App(){
   const [user,setUser]=useState(()=>localStorage.getItem("tok")?{tok:true}:null);
   const [signals,setSigs]=useState([]);const [regime,setRegime]=useState(null);
@@ -1480,6 +1531,13 @@ function App(){
   const indices=IDX_ORDER.map(l=>indicesMap[l]).filter(Boolean);
 
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),100);return()=>clearInterval(t);},[]);
+
+  // Hydrate full user profile when we only have a token (e.g. after page reload)
+  useEffect(()=>{
+    if(user&&!user.email){
+      api("/auth/me").then(u=>setUser(u)).catch(()=>{localStorage.removeItem("tok");setUser(null);});
+    }
+  },[user]);
 
   const [newSigToast,setNewSigToast]=useState(null);
   const addSignals=useCallback((incoming)=>{
