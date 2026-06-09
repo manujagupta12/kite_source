@@ -31,6 +31,8 @@ const MARKETS = [
     strategies:["S1 Calendar Spread","S2 Iron Condor","S5 PCR Contrarian"] },
   { id:"EQUITY",    label:"Equity",       icon:"E",  color:"#a78bfa",
     strategies:["E1 EMA Crossover","E2 VWAP Reversion","E3 ORB Breakout","E4 Gap Fill"] },
+  { id:"COMMODITY", label:"Commodities MCX", icon:"⬡", color:"#ffd700",
+    strategies:["S1 MCX Trend","S2 MCX Calendar"] },
 ];
 
 const STRAT_INFO = {
@@ -40,6 +42,9 @@ const STRAT_INFO = {
   E1:{color:"#a78bfa",tag:"MOMENTUM"},  E2:{color:"#fb923c",tag:"MEAN REV"},
   E3:{color:"#38bdf8",tag:"BREAKOUT"},  E4:{color:"#e879f9",tag:"GAP FILL"},
   E6:{color:"#facc15",tag:"GAP FILL"},
+  // Commodity keys — S1/S2 MCX strategies resolve to these via skey()
+  // kept separate so commodity signals have gold-tinted display
+  MC:{color:"#ffd700",tag:"TREND"},     C2:{color:"#ff9f43",tag:"CALENDAR"},
 };
 
 const PCR_ZONE_COLOR = {
@@ -66,7 +71,7 @@ function isLiveSignal(s) {
   const src = (s.source || "").toLowerCase();
   return s.is_live === true ||
     src.startsWith("nse") || src === "pcr_strategy" || src === "pcr_live" ||
-    src === "calendar_algo" || src === "data_provider";
+    src === "calendar_algo" || src === "data_provider" || src === "mcx_live";
 }
 function isMockSignal(s) {
   const src = (s.source || "").toLowerCase();
@@ -342,29 +347,22 @@ function sigClass(dir=""){const d=dir.toUpperCase();if(d.includes("BUY")||d.incl
 function fmt(n,dec=2){return n!=null&&n!==0?Number(n).toLocaleString("en-IN",{minimumFractionDigits:dec,maximumFractionDigits:dec}):"—";}
 function fmtINR(n){return n!=null?`₹${Number(n).toLocaleString("en-IN")}`:"—";}
 function chgClass(c){return c>0?"tick-up":c<0?"tick-dn":"tick-unch";}
-function matchesMarket(sig,market){if(market==="ALL")return true;if(market==="EQUITY")return sig.market==="EQUITY";const inst=(sig.instrument||sig.symbol||"").toUpperCase();return inst===market&&sig.market!=="EQUITY";}
+function matchesMarket(sig,market){if(market==="ALL")return true;if(market==="EQUITY")return sig.market==="EQUITY";if(market==="COMMODITY")return sig.market==="COMMODITY";const inst=(sig.instrument||sig.symbol||"").toUpperCase();return inst===market&&sig.market!=="EQUITY"&&sig.market!=="COMMODITY";}
 function matchesStrategy(sig,stratLabel){if(!stratLabel)return true;return skey(sig.strategy)===skey(stratLabel);}
 
-function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction}){
+function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction,currency="₹"}){
   const [candles,setCandles]=useState([]);
   const [ivl,setIvl]=useState("5");
   const [loading,setLoading]=useState(false);
   const [src,setSrc]=useState("");
-  const [visible,setVisible]=useState(false);
   const ref=useRef(null);
+  // Load charts eagerly — IntersectionObserver doesn't fire inside position:fixed+overflow:hidden root (.app)
   useEffect(()=>{
-    const obs=new IntersectionObserver(([e])=>{if(e.isIntersecting){setVisible(true);obs.disconnect();}},{threshold:0.1});
-    if(ref.current)obs.observe(ref.current);
-    return()=>obs.disconnect();
-  },[]);
-  useEffect(()=>{
-    if(!visible)return;
     setLoading(true);
     api(`/chart/${symbol}?interval=${ivl}`)
       .then(d=>{setCandles(d.candles||[]);setSrc(d.source||"");setLoading(false);})
       .catch(()=>setLoading(false));
-  },[symbol,ivl,visible]);
-  if(!visible)return(<div className="sig-chart-wrap" ref={ref} style={{minHeight:40}}/>);
+  },[symbol,ivl]);
   if(loading)return(<div className="sig-chart-wrap" ref={ref}><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>Loading…</div></div>);
   if(!candles.length)return(<div className="sig-chart-wrap" ref={ref}><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>No data</div></div>);
   const data=candles.map(c=>({t:c.time.slice(11,16),price:c.close,open:c.open,high:c.high,low:c.low}));
@@ -377,7 +375,7 @@ function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction}){
     <div className="sig-chart-header">
       <span className="sig-chart-title">{symbol} • {ivl}m{src==="FALLBACK"?" • SIM":""}</span>
       <div style={{display:"flex",alignItems:"center",gap:6}}>
-        <span className="sig-chart-price" style={{color:dirColor}}>₹{fmt(prices[prices.length-1],0)}</span>
+        <span className="sig-chart-price" style={{color:dirColor}}>{currency}{fmt(prices[prices.length-1],currency==="$"?2:0)}</span>
         <div className="sig-chart-tabs">{["1","3","5","15","30"].map(iv=>(<div key={iv} className={`sig-chart-tab ${ivl===iv?"act":""}`} onClick={()=>setIvl(iv)}>{iv}m</div>))}</div>
       </div>
     </div>
@@ -386,7 +384,7 @@ function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction}){
         <CartesianGrid strokeDasharray="2 4" stroke="rgba(27,48,80,.6)"/>
         <XAxis dataKey="t" tick={{fontSize:6,fill:"var(--dim)"}} tickLine={false} interval={9}/>
         <YAxis domain={[minP,maxP]} tick={{fontSize:6,fill:"var(--dim)"}} tickLine={false} width={40} tickFormatter={v=>v>=1000?`${(v/1000).toFixed(1)}k`:v.toFixed(0)}/>
-        <Tooltip contentStyle={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:6,fontSize:9}} formatter={(val,name)=>[`₹${Number(val).toLocaleString("en-IN")}`,name]} labelFormatter={l=>l+" IST"}/>
+        <Tooltip contentStyle={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:6,fontSize:9}} formatter={(val,name)=>[`${currency}${Number(val).toLocaleString("en-IN")}`,name]} labelFormatter={l=>l+" IST"}/>
         <Area type="monotone" dataKey="price" stroke={dirColor} strokeWidth={1.5} fill={direction==="BUY"||direction==="LONG"?"rgba(0,255,157,.07)":"rgba(255,61,90,.07)"} dot={false} name="Price"/>
         {entryPrice&&<Line type="monotone" dataKey={()=>entryPrice} stroke="var(--acc)" strokeWidth={1} strokeDasharray="3 2" dot={false} name="Entry"/>}
         {targetPrice&&<Line type="monotone" dataKey={()=>targetPrice} stroke="var(--grn)" strokeWidth={1} strokeDasharray="3 2" dot={false} name="Target"/>}
@@ -394,9 +392,9 @@ function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction}){
       </ComposedChart>
     </ResponsiveContainer>
     <div style={{display:"flex",gap:12,padding:"4px 10px 6px",fontSize:8,fontFamily:"var(--mono)"}}>
-      {entryPrice&&<span style={{color:"var(--acc)"}}>— Entry ₹{fmt(entryPrice,0)}</span>}
-      {targetPrice&&<span style={{color:"var(--grn)"}}>— Target ₹{fmt(targetPrice,0)}</span>}
-      {slPrice&&<span style={{color:"var(--red)"}}>— SL ₹{fmt(slPrice,0)}</span>}
+      {entryPrice&&<span style={{color:"var(--acc)"}}>— Entry {currency}{fmt(entryPrice,currency==="$"?2:0)}</span>}
+      {targetPrice&&<span style={{color:"var(--grn)"}}>— Target {currency}{fmt(targetPrice,currency==="$"?2:0)}</span>}
+      {slPrice&&<span style={{color:"var(--red)"}}>— SL {currency}{fmt(slPrice,currency==="$"?2:0)}</span>}
     </div>
   </div>);
 }
@@ -492,6 +490,7 @@ function sigExpiredLabel(s) {
 function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
   const isPcr=(sig.strategy||"").toUpperCase().includes("PCR")||sig.source==="pcr_strategy"||sig.source==="pcr_mock";
   const isEq=sig.market==="EQUITY";
+  const isCommodity=sig.market==="COMMODITY";
   const chartSymbol=sig.instrument||sig.symbol||(isEq?sig.symbol:"BANKNIFTY");
   const entryPrice=sig.entry_at||sig.ltp||sig.spot||null;
   const targetPrice=sig.target_at||(sig.target_pts&&entryPrice?(sig.direction==="BUY"||sig.direction==="LONG"?entryPrice+sig.target_pts:entryPrice-sig.target_pts):null);
@@ -533,6 +532,56 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
       <div className="sig-action"><span style={{color:sig.direction==="LONG"||sig.direction==="BUY"?"var(--grn)":"var(--red)",fontWeight:700}}>{sig.direction}</span>{" "}{sig.instrument} — PCR {pcr!=null?Number(pcr).toFixed(3):"—"}{zone==="OVERBOUGHT"?" — Fade GREED":zone==="OVERSOLD"?" — Fade FEAR":""}</div>
       {sig.reason&&<div className="sig-reason">{sig.reason}</div>}
       <div className="sig-foot"><div className="sig-src">📊 {sig.source||"PCR"}</div>{isLiveSignal(sig)&&<span style={{fontSize:7,fontFamily:"var(--mono)",fontWeight:700,padding:"1px 5px",borderRadius:3,background:"rgba(0,255,157,.12)",color:"var(--grn)",border:"1px solid rgba(0,255,157,.25)"}}>● LIVE NSE</span>}<span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log Trade</span></div>
+    </div>);
+  }
+
+  if(isCommodity){
+    const isCalSpr=(sig.strategy||"").toUpperCase().includes("CALENDAR");
+    const col="#ffd700";
+    const ltp=sig.ltp||sig.near_ltp||0;
+    const chg=0; // YF futures don't provide daily change in signal payload
+    const unit=sig.unit||"";
+    const exchange=sig.exchange||"MCX";
+    return(<div className={`sig-card ${sigClass(sig.direction)}`}>
+      <div className="sig-top"><div>
+        <div className="sig-strat" style={{color:col}}>{sig.strategy}<span style={{fontSize:8,marginLeft:5,color:"#ffd70099",fontFamily:"var(--mono)"}}>{exchange}</span></div>
+        <div className="sig-tags">
+          <span className="sig-tag" style={{background:"rgba(255,215,0,.12)",color:col,border:"1px solid rgba(255,215,0,.25)"}}>{sig.symbol||sig.instrument}</span>
+          <span className="sig-tag" style={{background:isCalSpr?"rgba(255,159,67,.12)":"rgba(255,215,0,.08)",color:isCalSpr?"#ff9f43":col,border:`1px solid ${isCalSpr?"rgba(255,159,67,.25)":"rgba(255,215,0,.2)"}`}}>{isCalSpr?"CALENDAR":"TREND"}</span>
+          {unit&&<span className="sig-tag" style={{background:"rgba(255,255,255,.04)",color:"var(--dim)",border:"1px solid var(--br)",fontSize:8}}>{unit}</span>}
+        </div></div>
+        <div className="sig-score-wrap"><div className="sig-score" style={{color:scoreColor(sig.score)}}>{sig.score}</div><div className="sig-score-lbl">SCORE</div></div>
+      </div>
+      <div className="eq-price-hero"><div><div className="eq-sym">{sig.symbol||sig.instrument}</div></div>
+        <div style={{textAlign:"right"}}>
+          <div className="eq-ltp" style={{color:"var(--yel)"}}>{ltp?fmt(ltp,2):"—"} <span style={{fontSize:9,color:"var(--muted)"}}>{unit}</span></div>
+          {sig.ema9&&<div style={{fontSize:8,color:"var(--dim)",fontFamily:"var(--mono)"}}>EMA9: {fmt(sig.ema9,2)} | EMA21: {fmt(sig.ema21,2)}</div>}
+        </div>
+      </div>
+      {isCalSpr&&sig.spread!=null&&(<div style={{padding:"6px 10px",background:"var(--s2)",borderRadius:6,margin:"4px 0",fontSize:10,fontFamily:"var(--mono)",display:"flex",gap:14,flexWrap:"wrap"}}>
+        <span>Spread: <b style={{color:sig.z_score>0?"var(--red)":"var(--grn)"}}>{sig.spread>0?"+":""}{fmt(sig.spread,3)}</b></span>
+        <span>Mean: {fmt(sig.spread_mean,3)}</span>
+        <span>Z: <b style={{color:Math.abs(sig.z_score||0)>=2?"var(--red)":"var(--yel)"}}>{sig.z_score>0?"+":""}{fmt(sig.z_score,2)}σ</b></span>
+        {sig.near_ltp&&<span>Near: {fmt(sig.near_ltp,3)}</span>}
+        {sig.far_ltp&&<span>Far: {fmt(sig.far_ltp,3)}</span>}
+      </div>)}
+      <SignalMiniChart symbol={sig.symbol||sig.instrument} entryPrice={sig.ltp||sig.near_ltp||null} targetPrice={sig.target||null} slPrice={sig.stop_loss||null} direction={sig.direction} currency="$"/>
+      <div className="sig-action"><span style={{color:sig.direction==="LONG"||sig.direction==="BUY"?"var(--grn)":"var(--red)",fontWeight:700}}>{sig.direction}</span>{" "}{sig.entry||sig.action||"—"}</div>
+      <div className="sig-meta">
+        {sig.rsi!=null&&<div className="meta-box"><div className="meta-k">RSI</div><div className="meta-v" style={{color:sig.rsi>70?"var(--red)":sig.rsi<30?"var(--grn)":"var(--yel)"}}>{fmt(sig.rsi,1)}</div></div>}
+        {sig.atr!=null&&<div className="meta-box"><div className="meta-k">ATR</div><div className="meta-v">{fmt(sig.atr,3)}</div></div>}
+        <div className="meta-box"><div className="meta-k">Target</div><div className="meta-v" style={{color:"var(--grn)"}}>{sig.target_pts?"+"+fmt(sig.target_pts,3):"—"}</div></div>
+        <div className="meta-box"><div className="meta-k">SL</div><div className="meta-v" style={{color:"var(--red)"}}>{sig.sl_pts?"-"+fmt(sig.sl_pts,3):"—"}</div></div>
+        <div className="meta-box"><div className="meta-k">R/R</div><div className="meta-v">{sig.rr_ratio||"—"}</div></div>
+        <div className="meta-box"><div className="meta-k">Lots</div><div className="meta-v">{sig.lots_suggested||1}</div></div>
+      </div>
+      {sig.reason&&<div className="sig-reason">{sig.reason}</div>}
+      <div className="sig-foot">
+        <div className="sig-src">🔶 {sig.source||"MCX"}</div>
+        {isLiveSignal(sig)&&<span style={{fontSize:7,fontFamily:"var(--mono)",fontWeight:700,padding:"1px 5px",borderRadius:3,background:"rgba(255,215,0,.12)",color:"#ffd700",border:"1px solid rgba(255,215,0,.3)"}}>● LIVE MCX</span>}
+        <span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span>
+        <span className="log-trade-btn" onClick={()=>onLogTrade&&onLogTrade(sig)}>📝 Log</span>
+      </div>
     </div>);
   }
 
@@ -602,8 +651,8 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
   </div>);
 }
 
-function MoversPanel(){const [movers,setMovers]=useState({gainers:[],losers:[]});useEffect(()=>{api("/movers").then(setMovers).catch(()=>{});},[]);return(<div className="movers-grid">{[{key:"gainers",lbl:"▲ Top Gainers",col:"var(--grn)",cls:"chg-up",pfx:"+"},{key:"losers",lbl:"▼ Top Losers",col:"var(--red)",cls:"chg-dn",pfx:""}].map(g=>(<div className="mover-table" key={g.key}><div className="mover-hdr" style={{color:g.col}}>{g.lbl}</div>{(movers[g.key]||[]).map((m,i)=>(<div className="mover-row" key={i}><span className="mover-sym">{m.symbol}</span><span className="mover-ltp">₹{fmt(m.ltp,2)}</span><span className={`mover-chg ${g.cls}`}>{g.pfx}{fmt(m.change_pct,2)}%</span></div>))}{!(movers[g.key]||[]).length&&<div style={{padding:"10px 12px",fontSize:10,color:"var(--muted)"}}>Loading…</div>}</div>))}</div>);}
-function StratSegBanner({signals}){const groups=[{id:"S1",label:"Calendar",color:"#00d4ff"},{id:"S2",label:"Iron Condor",color:"#00ff9d"},{id:"S3",label:"Straddle",color:"#f5c518"},{id:"S4",label:"0DTE Scalp",color:"#ff6b35"},{id:"S5",label:"PCR",color:"#22c55e"},{id:"EQ",label:"Equity",color:"#a78bfa"}];return(<div className="strat-seg">{groups.map(g=>{const count=g.id==="EQ"?signals.filter(s=>s.market==="EQUITY").length:signals.filter(s=>skey(s.strategy)===g.id).length;return(<div key={g.id} className="strat-seg-card"><div><div className="strat-seg-name">{g.label}</div><div className="strat-seg-count" style={{color:count>0?g.color:"var(--dim)"}}>{count}</div></div><div style={{width:3,height:28,borderRadius:2,background:count>0?g.color:"var(--br)"}}/></div>);})}</div>);}
+function MoversPanel(){const [movers,setMovers]=useState({gainers:[],losers:[]});useEffect(()=>{const load=()=>api("/movers").then(d=>{if(d&&(d.gainers?.length||d.losers?.length))setMovers(d);}).catch(()=>{});load();const t=setInterval(load,20000);return()=>clearInterval(t);},[]);return(<div className="movers-grid">{[{key:"gainers",lbl:"▲ Top Gainers",col:"var(--grn)",cls:"chg-up",pfx:"+"},{key:"losers",lbl:"▼ Top Losers",col:"var(--red)",cls:"chg-dn",pfx:""}].map(g=>(<div className="mover-table" key={g.key}><div className="mover-hdr" style={{color:g.col}}>{g.lbl}</div>{(movers[g.key]||[]).map((m,i)=>(<div className="mover-row" key={i}><span className="mover-sym">{m.symbol}</span><span className="mover-ltp">₹{fmt(m.ltp,2)}</span><span className={`mover-chg ${g.cls}`}>{g.pfx}{fmt(m.change_pct,2)}%</span></div>))}{!(movers[g.key]||[]).length&&<div style={{padding:"10px 12px",fontSize:10,color:"var(--muted)"}}>Loading…</div>}</div>))}</div>);}
+function StratSegBanner({signals}){const groups=[{id:"S1",label:"Calendar",color:"#00d4ff"},{id:"S2",label:"Iron Condor",color:"#00ff9d"},{id:"S3",label:"Straddle",color:"#f5c518"},{id:"S4",label:"0DTE Scalp",color:"#ff6b35"},{id:"S5",label:"PCR",color:"#22c55e"},{id:"EQ",label:"Equity",color:"#a78bfa"},{id:"CO",label:"Commodity",color:"#ffd700"}];return(<div className="strat-seg">{groups.map(g=>{const count=g.id==="EQ"?signals.filter(s=>s.market==="EQUITY").length:g.id==="CO"?signals.filter(s=>s.market==="COMMODITY").length:signals.filter(s=>skey(s.strategy)===g.id&&s.market!=="COMMODITY").length;return(<div key={g.id} className="strat-seg-card"><div><div className="strat-seg-name">{g.label}</div><div className="strat-seg-count" style={{color:count>0?g.color:"var(--dim)"}}>{count}</div></div><div style={{width:3,height:28,borderRadius:2,background:count>0?g.color:"var(--br)"}}/></div>);})}</div>);}
 function IndexTicker({indices}){if(!indices||!indices.length)return null;const items=[...indices,...indices];return(<div className="ticker-bar"><div className="ticker-inner">{items.map((idx,i)=>(<div className={`tick-item ${idx._flash||""}`} key={`${idx.label}-${i}-${idx._ts||0}`}><span className="tick-label">{idx.label}</span><span className={`tick-val ${chgClass(idx.change_pct)}`}>{idx.ltp?fmt(idx.ltp,idx.label==="VIX"?2:0):"—"}</span>{idx.change_pct!==0&&<span className={`tick-chg ${chgClass(idx.change_pct)}`} style={{background:idx.change_pct>0?"rgba(0,255,157,.1)":"rgba(255,61,90,.1)"}}>{idx.change_pct>0?"+":""}{fmt(idx.change_pct,2)}%</span>}</div>))}</div></div>);}
 function IndexStrip({indices}){const main=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP"];const shown=(indices||[]).filter(i=>main.includes(i.label));if(!shown.length)return null;return(<div className="idx-strip">{shown.map(idx=>{const up=idx.change_pct>0,dn=idx.change_pct<0;const col=up?"var(--grn)":dn?"var(--red)":"var(--muted)";return(<div className={`idx-card ${idx._flash||""}`} key={`${idx.label}-${idx._ts||0}`}><div className="idx-name">{idx.label}</div><div className="idx-ltp" style={{color:idx.ltp?col:"var(--muted)"}}>{idx.ltp?fmt(idx.ltp,idx.label==="VIX"?2:0):"Loading…"}</div><div className="idx-chg" style={{color:col}}>{idx.change_pct!==0?(idx.change_pct>0?"+":"")+fmt(idx.change_pct,2)+"%":"—"}</div>{(idx.high||idx.low)?<div className="idx-hl">H:{fmt(idx.high,0)} L:{fmt(idx.low,0)}</div>:null}</div>);})}</div>);}
 
@@ -845,107 +894,227 @@ function PlaceOrderModal({sig,onClose,userPlan}){
 }
 
 
-function BrokerTab({userPlan}){
-  const [status,setStatus]=useState(null);
-  const [switching,setSwitching]=useState("");
+function BrokerCredField({label,value,onChange,placeholder,hint}){
+  const [show,setShow]=useState(false);
+  return(<div style={{marginBottom:8}}>
+    <div style={{fontSize:8,color:"var(--muted)",fontFamily:"var(--mono)",marginBottom:3,letterSpacing:.5}}>{label}</div>
+    <div style={{display:"flex",gap:4}}>
+      <input
+        type={show?"text":"password"}
+        className="form-inp"
+        style={{flex:1,fontFamily:"var(--mono)",fontSize:10,letterSpacing:show?0:2}}
+        value={value} onChange={e=>onChange(e.target.value)}
+        placeholder={placeholder||"Paste here…"}
+        autoComplete="off" spellCheck={false}
+      />
+      <button className="btn btn-ghost" style={{padding:"0 8px",fontSize:9,flexShrink:0}}
+        onClick={()=>setShow(s=>!s)} title={show?"Hide":"Show"}>
+        {show?"🙈":"👁"}
+      </button>
+    </div>
+    {hint&&<div style={{fontSize:8,color:"var(--dim)",marginTop:2}}>{hint}</div>}
+  </div>);
+}
+
+function BrokerCard({broker,creds,brokerStatus,activeBroker,onSaved,onSwitch,isPaid}){
+  const {id,name,color,icon,fields,docsUrl,docsLabel,notes} = broker;
+  const [form,setForm]=useState({});
+  const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState("");
+  const [open,setOpen]=useState(false);
+
+  const status = creds?.[id] || {};
+  const isConnected = status.connected || false;
+  const isActive = activeBroker === id;
+
+  const handleSave=async()=>{
+    setSaving(true); setMsg("");
+    try{
+      const payload={};
+      fields.forEach(f=>{ if(form[f.key]) payload[f.apiKey||f.key]=form[f.key].trim(); });
+      const r=await api(`/broker/credentials/${id}`,{method:"POST",body:JSON.stringify(payload)});
+      setMsg(r.message||"Saved ✓");
+      setForm({});
+      if(onSaved) onSaved();
+    }catch(e){setMsg("✗ "+e.message);}
+    finally{setSaving(false);}
+  };
+
+  const allFilled = fields.filter(f=>f.required).every(f=>form[f.key]?.trim());
+
+  return(<div style={{
+    background:"var(--s1)",borderRadius:12,
+    border:`2px solid ${isActive?color:isConnected?"rgba(0,255,157,.25)":"var(--br)"}`,
+    overflow:"hidden",marginBottom:10,transition:"border-color .2s",
+  }}>
+    {/* Header */}
+    <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",cursor:"pointer"}}
+      onClick={()=>setOpen(o=>!o)}>
+      <span style={{fontSize:20}}>{icon}</span>
+      <div style={{flex:1}}>
+        <div style={{display:"flex",alignItems:"center",gap:7}}>
+          <span style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color}}>{name}</span>
+          {isActive&&<span style={{fontSize:7,fontFamily:"var(--mono)",padding:"1px 5px",borderRadius:3,
+            background:color+"20",color,border:`1px solid ${color}40`}}>ACTIVE</span>}
+          {isConnected&&!isActive&&<span style={{fontSize:7,fontFamily:"var(--mono)",padding:"1px 5px",borderRadius:3,
+            background:"rgba(0,255,157,.1)",color:"var(--grn)",border:"1px solid rgba(0,255,157,.2)"}}>● CONNECTED</span>}
+          {!isConnected&&<span style={{fontSize:7,fontFamily:"var(--mono)",padding:"1px 5px",borderRadius:3,
+            background:"rgba(255,61,90,.08)",color:"var(--red)",border:"1px solid rgba(255,61,90,.15)"}}>● NOT SET</span>}
+        </div>
+        {/* Show masked existing creds */}
+        {isConnected&&<div style={{display:"flex",gap:8,marginTop:3,flexWrap:"wrap"}}>
+          {fields.map(f=>{
+            const s=status[f.key];
+            return s?.set?(<span key={f.key} style={{fontSize:8,fontFamily:"var(--mono)",color:"var(--dim)"}}>
+              {f.label}: <span style={{color:"var(--muted)"}}>{s.masked}</span>
+            </span>):null;
+          })}
+        </div>}
+      </div>
+      <span style={{color:"var(--dim)",fontSize:12,transform:open?"rotate(180deg)":"none",transition:"transform .15s"}}>▾</span>
+    </div>
+
+    {/* Expanded form */}
+    {open&&<div style={{padding:"0 14px 14px",borderTop:"1px solid var(--br)"}}>
+      <div style={{paddingTop:12}}>
+        {fields.map(f=>(
+          <BrokerCredField
+            key={f.key} label={f.label+(f.required?" *":"")}
+            value={form[f.key]||""} onChange={v=>setForm(p=>({...p,[f.key]:v}))}
+            placeholder={isConnected&&status[f.key]?.set?`Current: ${status[f.key]?.masked}`:f.placeholder}
+            hint={f.hint}
+          />
+        ))}
+        {msg&&<div style={{fontSize:10,padding:"5px 8px",borderRadius:5,marginBottom:8,
+          background:msg.startsWith("✗")?"rgba(255,61,90,.08)":"rgba(0,255,157,.08)",
+          color:msg.startsWith("✗")?"var(--red)":"var(--grn)",
+          border:`1px solid ${msg.startsWith("✗")?"rgba(255,61,90,.2)":"rgba(0,255,157,.2)"}`}}>{msg}</div>}
+        <div style={{display:"flex",gap:7,flexWrap:"wrap",alignItems:"center"}}>
+          <button className="btn btn-primary" style={{fontSize:10,flex:1,minWidth:100}}
+            onClick={handleSave} disabled={saving||!allFilled}>
+            {saving?"Saving…":"Save credentials"}
+          </button>
+          {isPaid&&isConnected&&!isActive&&<button className="btn btn-ghost" style={{fontSize:9}}
+            onClick={()=>onSwitch(id)}>
+            Set active
+          </button>}
+          <a href={docsUrl} target="_blank" rel="noreferrer"
+            style={{fontSize:9,color:"var(--dim)",textDecoration:"none",marginLeft:"auto"}}>
+            {docsLabel||"Get tokens →"}
+          </a>
+        </div>
+        {notes&&<div style={{marginTop:10,padding:"7px 9px",background:"var(--s2)",borderRadius:6,
+          fontSize:9,color:"var(--dim)",lineHeight:1.6,borderLeft:`2px solid ${color}40`}}>{notes}</div>}
+      </div>
+    </div>}
+  </div>);
+}
+
+function BrokerTab({userPlan}){
+  const [brokerStatus,setBrokerStatus]=useState(null);
+  const [creds,setCreds]=useState(null);
+  const [switching,setSwitching]=useState("");
+  const [switchMsg,setSwitchMsg]=useState("");
   const isPaid=["weekly","monthly","annual"].includes(userPlan);
 
-  const load=()=>api("/broker/status").then(setStatus).catch(()=>{});
-  useEffect(()=>{load();const t=setInterval(load,15000);return()=>clearInterval(t);},[]);
+  const load=()=>{
+    api("/broker/status").then(setBrokerStatus).catch(()=>{});
+    api("/broker/credentials/status").then(setCreds).catch(()=>{});
+  };
+  useEffect(()=>{load();const t=setInterval(load,20000);return()=>clearInterval(t);},[]);
 
   const switchBroker=async(name)=>{
-    setSwitching(name);setMsg("");
+    setSwitching(name); setSwitchMsg("");
     try{
       const r=await api(`/broker/switch/${name}`);
-      setMsg(r.message||`Switched to ${name}`);
+      setSwitchMsg(r.message||`Switched to ${name}`);
       load();
-    }catch(e){setMsg("✗ "+e.message);}
+    }catch(e){setSwitchMsg("✗ "+e.message);}
     finally{setSwitching("");}
   };
 
   const BROKERS=[
-    {id:"dhan",  name:"Dhan",  desc:"Your primary broker",        docsUrl:"https://web.dhan.co",        envKey:"DHAN_ACCESS_TOKEN", color:"#FF6B00"},
-    {id:"kite",  name:"Kite",  desc:"Zerodha Kite Connect",       docsUrl:"https://kite.trade/connect", envKey:"KITE_ACCESS_TOKEN", color:"#387ED1"},
-    {id:"paper", name:"Paper", desc:"Simulated — no real orders", docsUrl:null,                         envKey:null,                color:"#9E9E9E"},
+    {
+      id:"dhan", name:"Dhan", color:"#FF6B00", icon:"🔶",
+      docsUrl:"https://dhanhq.co/docs/latest/", docsLabel:"Dhan API docs →",
+      notes:"Get from Dhan app → My Profile → Dhan HQ → API Trading. Access token expires daily — paste a fresh one each morning.",
+      fields:[
+        {key:"client_id",   apiKey:"client_id",    label:"Client ID",     required:true,  placeholder:"1000000123",     hint:"Found in Dhan app → Profile → Client ID"},
+        {key:"access_token",apiKey:"access_token",  label:"Access Token",  required:true,  placeholder:"eyJ0eXAiOiJKV1Q…",hint:"Generated from Dhan HQ → API → Create Session"},
+      ],
+    },
+    {
+      id:"kite", name:"Zerodha Kite", color:"#387ED1", icon:"🔵",
+      docsUrl:"https://kite.trade/connect", docsLabel:"Kite Connect docs →",
+      notes:"API Key is permanent. Access Token regenerates every day at 8 AM — fetch it via your login flow and paste here. kiteconnect must be installed (pip install kiteconnect).",
+      fields:[
+        {key:"api_key",      apiKey:"api_key",      label:"API Key",       required:true,  placeholder:"your_kite_api_key",   hint:"From kite.trade/connect → Apps"},
+        {key:"access_token", apiKey:"access_token", label:"Access Token",  required:true,  placeholder:"Daily token from login", hint:"Expires daily — regenerate via Kite login"},
+      ],
+    },
+    {
+      id:"upstox", name:"Upstox", color:"#7C3AED", icon:"🟣",
+      docsUrl:"https://upstox.com/developer/api-documentation", docsLabel:"Upstox API docs →",
+      notes:"API Key and Secret are permanent. Access Token is OAuth-based and expires daily. Paste the access token you receive after completing the Upstox login OAuth flow.",
+      fields:[
+        {key:"api_key",      apiKey:"api_key",      label:"API Key",       required:true,  placeholder:"your-upstox-api-key"},
+        {key:"api_secret",   apiKey:"api_secret",   label:"API Secret",    required:true,  placeholder:"your-upstox-api-secret"},
+        {key:"access_token", apiKey:"access_token", label:"Access Token",  required:false, placeholder:"OAuth access token (optional)",hint:"Paste after completing Upstox OAuth login"},
+      ],
+    },
+    {
+      id:"delta", name:"Delta Exchange", color:"#ffd700", icon:"⬡",
+      docsUrl:"https://docs.delta.exchange", docsLabel:"Delta Exchange docs →",
+      notes:"Used for MCX commodity signals (Gold, Silver) and commodity order placement. Get from Delta Exchange India → Profile → API Keys → Create Key (enable Read + Trade).",
+      fields:[
+        {key:"api_key",    apiKey:"api_key",    label:"API Key",    required:true, placeholder:"your-delta-api-key"},
+        {key:"api_secret", apiKey:"api_secret", label:"API Secret", required:true, placeholder:"your-delta-api-secret"},
+      ],
+    },
   ];
 
-  const active=status?.broker||"none";
-  const available=status?.available||{};
+  const active=brokerStatus?.broker||"none";
 
   return(<div>
-    {/* Status header */}
-    <div style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:12,padding:"16px 18px",marginBottom:14}}>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
-        <span style={{fontSize:18}}>⚡</span>
-        <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--acc)"}}>BROKER STATUS</div>
-        {status&&<span style={{fontSize:9,fontFamily:"var(--mono)",padding:"2px 8px",borderRadius:10,
-          background:status.ok?"rgba(0,255,157,.1)":"rgba(255,61,90,.1)",
-          color:status.ok?"var(--grn)":"var(--red)",
-          border:`1px solid ${status.ok?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`}}>
-          {status.ok?`● ${active.toUpperCase()} ACTIVE`:"● NO BROKER"}
-        </span>}
-      </div>
-      {/* Upstox banner removed — not in use */}
-      {!isPaid&&<div style={{background:"rgba(245,197,24,.06)",border:"1px solid rgba(245,197,24,.2)",borderRadius:7,padding:"7px 11px",fontSize:10,color:"var(--yel)"}}>
-        ⚠ Live order placement requires Weekly plan or above. Broker status visible on all plans.
+    {/* Active broker header */}
+    <div style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:12,padding:"14px 16px",marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+      <span style={{fontSize:16}}>⚡</span>
+      <div style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:"var(--acc)"}}>ACTIVE BROKER</div>
+      <span style={{fontFamily:"var(--mono)",fontSize:11,padding:"2px 10px",borderRadius:8,
+        background:brokerStatus?.ok?"rgba(0,255,157,.1)":"rgba(255,61,90,.08)",
+        color:brokerStatus?.ok?"var(--grn)":"var(--red)",
+        border:`1px solid ${brokerStatus?.ok?"rgba(0,255,157,.2)":"rgba(255,61,90,.15)"}`}}>
+        {brokerStatus?.ok?`● ${active.toUpperCase()} ACTIVE`:"● NO BROKER CONNECTED"}
+      </span>
+      {switchMsg&&<span style={{fontSize:9,color:switchMsg.startsWith("✗")?"var(--red)":"var(--grn)",fontFamily:"var(--mono)"}}>{switchMsg}</span>}
+      {!isPaid&&<div style={{width:"100%",background:"rgba(245,197,24,.06)",border:"1px solid rgba(245,197,24,.2)",borderRadius:6,padding:"5px 9px",fontSize:9,color:"var(--yel)"}}>
+        ⚠ Live order placement requires Weekly plan or above.
       </div>}
     </div>
 
-    {msg&&<div style={{fontSize:11,padding:"6px 9px",borderRadius:6,marginBottom:10,
-      background:msg.startsWith("✗")?"rgba(255,61,90,.08)":"rgba(0,255,157,.08)",
-      color:msg.startsWith("✗")?"var(--red)":"var(--grn)",
-      border:`1px solid ${msg.startsWith("✗")?"rgba(255,61,90,.2)":"rgba(0,255,157,.2)"}`}}>{msg}</div>}
-
-    {/* Broker cards */}
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:14}}>
-      {BROKERS.map(b=>{
-        const isActive=active===b.id;
-        const isAvail=b.envKey?available[b.id]:true;
-        const isSwitching=switching===b.id;
-        return(<div key={b.id} style={{
-          background:"var(--s1)",borderRadius:10,padding:"14px",
-          border:`2px solid ${isActive?b.color:"var(--br)"}`,
-          opacity:isAvail||b.id==="paper"?1:0.6,
-          transition:"border-color .15s",
-        }}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-            <div style={{fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:b.color}}>{b.name}</div>
-            {isActive&&<span style={{fontSize:8,fontFamily:"var(--mono)",padding:"2px 6px",borderRadius:4,
-              background:b.color+"20",color:b.color,border:`1px solid ${b.color}40`}}>ACTIVE</span>}
-          </div>
-          <div style={{fontSize:10,color:"var(--muted)",marginBottom:10}}>{b.desc}</div>
-          <div style={{fontSize:9,fontFamily:"var(--mono)",marginBottom:10,
-            color:isAvail?"var(--grn)":"var(--red)"}}>
-            {b.id==="paper"?"Always available":isAvail?"● Connected":"● Not configured"}
-          </div>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            {!isActive&&isPaid&&<button className="btn btn-ghost btn-sm" style={{fontSize:9,flex:1}}
-              onClick={()=>switchBroker(b.id)} disabled={!!switching}>
-              {isSwitching?"Switching…":"Use this"}
-            </button>}
-            {!isAvail&&b.docsUrl&&<a href={b.docsUrl} target="_blank" rel="noreferrer"
-              className="btn btn-ghost btn-sm" style={{fontSize:9,textDecoration:"none",flex:1,textAlign:"center",display:"block",padding:"5px 0"}}>
-              Get token →
-            </a>}
-            {isActive&&<span style={{fontSize:9,color:b.color,fontFamily:"var(--mono)",padding:"5px 0"}}>✓ Using this</span>}
-          </div>
-        </div>);
-      })}
+    {/* Broker credential cards — click to expand */}
+    <div style={{marginBottom:6,fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)",letterSpacing:.5}}>
+      CLICK A BROKER TO ADD OR UPDATE CREDENTIALS — NO RESTART NEEDED
     </div>
+    {BROKERS.map(b=>(
+      <BrokerCard key={b.id} broker={b} creds={creds} brokerStatus={brokerStatus}
+        activeBroker={active} onSaved={load} onSwitch={switchBroker} isPaid={isPaid}/>
+    ))}
 
-    {/* Setup guide */}
-    <div style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:10,padding:"14px 16px"}}>
-      <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",fontWeight:700,marginBottom:10,letterSpacing:"1px"}}>SETUP GUIDE</div>
-      {[
-        ["Dhan (recommended)", "Add DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN to .env → restart",      "#FF6B00"],
-        ["Zerodha Kite",       "Add KITE_API_KEY + KITE_ACCESS_TOKEN to .env → restart",           "#387ED1"],
-        ["Broker priority",    "Auto-selects: Dhan first, then Kite, then Paper",                   "#9E9E9E"],
-        ["Force broker",       "Set BROKER=dhan (or kite / paper) in .env",                         "#00d4ff"],
-      ].map(([k,v,c])=>(<div key={k} style={{display:"flex",gap:10,marginBottom:7,fontSize:10}}>
-        <div style={{fontFamily:"var(--mono)",color:c,minWidth:130,fontSize:9,flexShrink:0,paddingTop:2}}>{k}</div>
-        <div style={{color:"var(--muted)",lineHeight:1.5}}>{v}</div>
-      </div>))}
+    {/* Paper mode card */}
+    <div style={{background:"var(--s1)",borderRadius:10,border:"1px solid var(--br)",padding:"10px 14px",
+      opacity:active==="paper"?1:0.6,display:"flex",alignItems:"center",gap:10}}>
+      <span style={{fontSize:18}}>📄</span>
+      <div style={{flex:1}}>
+        <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:"#9E9E9E"}}>Paper Trading</div>
+        <div style={{fontSize:9,color:"var(--muted)",marginTop:2}}>Simulated orders — no real money. Always available, no credentials needed.</div>
+      </div>
+      {active==="paper"&&<span style={{fontSize:8,fontFamily:"var(--mono)",padding:"2px 6px",borderRadius:3,
+        background:"rgba(158,158,158,.12)",color:"#9E9E9E",border:"1px solid rgba(158,158,158,.2)"}}>ACTIVE</span>}
+      {active!=="paper"&&isPaid&&<button className="btn btn-ghost" style={{fontSize:9}}
+        onClick={()=>switchBroker("paper")} disabled={!!switching}>
+        {switching==="paper"?"…":"Use Paper"}
+      </button>}
     </div>
   </div>);
 }

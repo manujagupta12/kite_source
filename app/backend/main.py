@@ -10,6 +10,14 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Load .env into os.environ BEFORE any os.environ.get() calls below
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env", override=False)
+    logging.info("[Env] .env loaded via python-dotenv")
+except ImportError:
+    logging.warning("[Env] python-dotenv not installed — .env not loaded")
+
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -98,6 +106,21 @@ except Exception as e:
     _TL_OK = False; _tl = None
     logging.warning(f"[TL] trader_logger not loaded: {e}")
 
+# ── MCX Commodity module ──────────────────────────────────────────────────────
+_MCX_OK = False
+try:
+    from algo.mcx_strategy import generate_mcx_signals as _generate_mcx_signals, get_mcx_prices as _get_mcx_prices
+    _MCX_OK = True
+    logging.info("[MCX] mcx_strategy loaded — GOLD/SILVER/CRUDEOIL/COPPER/NATURALGAS")
+except ImportError:
+    try:
+        from mcx_strategy import generate_mcx_signals as _generate_mcx_signals, get_mcx_prices as _get_mcx_prices
+        _MCX_OK = True
+        logging.info("[MCX] mcx_strategy loaded (local path)")
+    except ImportError:
+        _generate_mcx_signals = None; _get_mcx_prices = None
+        logging.warning("[MCX] mcx_strategy not loaded — commodity signals unavailable")
+
 
 # ── IST market hours ─────────────────────────────────────────────────────
 try:
@@ -160,6 +183,103 @@ _paper: Dict[str, Any] = {}
 # ── Daily signal persistence ──────────────────────────────────────────────
 _DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Broker credentials persistence ───────────────────────────────────────────
+_BROKER_CREDS_FILE = _DATA_DIR / "broker_credentials.json"
+
+def _load_broker_credentials() -> None:
+    """
+    Load saved broker credentials from broker_credentials.json into env vars.
+    Called at startup so saved creds survive restarts without editing .env.
+    """
+    if not _BROKER_CREDS_FILE.exists():
+        return
+    try:
+        creds = json.loads(_BROKER_CREDS_FILE.read_text())
+        mapping = {
+            "dhan":   [("client_id",    "DHAN_CLIENT_ID"),
+                       ("access_token", "DHAN_ACCESS_TOKEN")],
+            "kite":   [("api_key",      "KITE_API_KEY"),
+                       ("access_token", "KITE_ACCESS_TOKEN")],
+            "upstox": [("api_key",      "UPSTOX_API_KEY"),
+                       ("api_secret",   "UPSTOX_API_SECRET"),
+                       ("access_token", "UPSTOX_ACCESS_TOKEN")],
+            "delta":  [("api_key",      "DELTA_API_KEY"),
+                       ("api_secret",   "DELTA_API_SECRET")],
+        }
+        for broker, fields in mapping.items():
+            saved = creds.get(broker, {})
+            for field, env_key in fields:
+                val = saved.get(field, "").strip()
+                if val and not os.environ.get(env_key):
+                    os.environ[env_key] = val
+        logging.info("[BrokerCreds] Loaded saved credentials from broker_credentials.json")
+    except Exception as e:
+        logging.warning(f"[BrokerCreds] Load error: {e}")
+
+def _save_broker_credentials(broker: str, fields: dict) -> None:
+    """Persist credential fields for one broker (merge, never wipe other brokers)."""
+    try:
+        existing = json.loads(_BROKER_CREDS_FILE.read_text()) if _BROKER_CREDS_FILE.exists() else {}
+        existing.setdefault(broker, {}).update({k: v for k, v in fields.items() if v})
+        _BROKER_CREDS_FILE.write_text(json.dumps(existing, indent=2))
+    except Exception as e:
+        logging.warning(f"[BrokerCreds] Save error: {e}")
+
+# ── .env file writer ──────────────────────────────────────────────────────────
+_DOTENV_PATH: Path = Path(__file__).parent.parent.parent / ".env"
+# Docker fallback: /app/.env
+if not _DOTENV_PATH.parent.exists():
+    _DOTENV_PATH = Path(__file__).parent / ".env"
+
+def _write_env_vars(updates: dict) -> None:
+    """
+    Write key=value pairs into the .env file — find-and-replace existing keys,
+    append new ones. Safe for concurrent-ish use (read-modify-write, not streaming).
+    Skips empty values so we never blank out an existing credential.
+
+    Example: _write_env_vars({"DHAN_CLIENT_ID": "123", "DHAN_ACCESS_TOKEN": "tok"})
+    """
+    try:
+        if _DOTENV_PATH.exists():
+            lines = _DOTENV_PATH.read_text(encoding="utf-8").splitlines(keepends=True)
+        else:
+            lines = []
+
+        remaining = dict(updates)   # keys still to write
+
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            # Skip comments and blanks unchanged
+            if not stripped or stripped.startswith("#"):
+                new_lines.append(line)
+                continue
+            # Parse KEY=value (ignore export prefix)
+            raw = stripped.removeprefix("export ").lstrip()
+            if "=" in raw:
+                k = raw.split("=", 1)[0].strip()
+                if k in remaining and remaining[k]:
+                    # Replace this line with the new value
+                    new_lines.append(f"{k}={remaining.pop(k)}\n")
+                    continue
+            new_lines.append(line)
+
+        # Append any keys that weren't in the file yet
+        for k, v in remaining.items():
+            if v:
+                new_lines.append(f"{k}={v}\n")
+
+        _DOTENV_PATH.write_text("".join(new_lines), encoding="utf-8")
+        logging.info(f"[DotEnv] Wrote {list(updates.keys())} → {_DOTENV_PATH.name}")
+    except Exception as e:
+        logging.warning(f"[DotEnv] Write error: {e}")
+
+def _mask(val: str) -> str:
+    """Mask a credential — show only last 4 characters."""
+    if not val or len(val) < 5:
+        return "••••" if val else ""
+    return "•" * (len(val) - 4) + val[-4:]
 
 def _signals_file(d: date = None) -> Path:
     d = d or date.today()
@@ -292,6 +412,13 @@ class DhanTokenRequest(BaseModel):
     client_id: str
     access_token: str
 
+class BrokerCredsRequest(BaseModel):
+    """Generic broker credential payload. Fields used vary by broker."""
+    api_key:      Optional[str] = None   # Kite api_key / Upstox api_key / Delta api_key
+    access_token: Optional[str] = None   # Kite access_token / Upstox access_token
+    api_secret:   Optional[str] = None   # Upstox api_secret / Delta api_secret
+    client_id:    Optional[str] = None   # Dhan client_id (alias for /dhan/token)
+
 class TLTradeEnterRequest(BaseModel):
     strategy: str; instrument: str = "BANKNIFTY"; option_type: str = "CE"
     direction: str = "LONG"; near_strike: str = "0"; far_strike: str = "0"
@@ -370,50 +497,84 @@ def _mock_pcr_signal(instrument=None):
     }
 
 # ── FIXED: NSE live signal (was _xls_signal, used wrong far_bid key) ───────
+def _calendar_sig_from_oc(oc: dict, source_tag: str):
+    """Build a Calendar S1 signal dict from a parsed option chain (NseConnector or Dhan format)."""
+    spot     = oc.get("spot_price", 0)
+    atm      = oc.get("atm_strike", int(round(spot / 100) * 100))
+    expiries = oc.get("expiries") or []
+    if len(expiries) < 2 or not spot:
+        return None
+    near_e, far_e = expiries[0], expiries[1]
+    # NseConnector format: records list; Dhan format: chain dict keyed by (strike, expiry)
+    chain = oc.get("chain", {})
+    if isinstance(chain, dict):
+        # Dhan format: {(atm, expiry): {CE: ..., PE: ...}}
+        near_ce = (chain.get((atm, near_e)) or {}).get("CE") or {}
+        far_ce  = (chain.get((atm, far_e))  or {}).get("CE") or {}
+    else:
+        # NseConnector format: list of {strike, expiry, CE, PE}
+        near_ce = next((r["CE"] for r in chain if r.get("strike")==atm and r.get("expiry")==near_e and r.get("CE")), {}) or {}
+        far_ce  = next((r["CE"] for r in chain if r.get("strike")==atm and r.get("expiry")==far_e  and r.get("CE")), {}) or {}
+    if not (near_ce and far_ce):
+        return None
+    near_ltp = near_ce.get("ltp") or near_ce.get("ask") or 0
+    far_ltp  = far_ce.get("ltp")  or far_ce.get("bid") or 0
+    spread   = round(float(far_ltp) - float(near_ltp), 2)
+    theta_diff = (far_ce.get("theta", 0) or 0) - (near_ce.get("theta", 0) or 0)
+    fair     = round(theta_diff * 0.5, 2) if theta_diff else 0
+    dev      = round(spread - fair, 2)
+    score    = min(95, max(30, 50 + int(abs(dev) * 8)))
+    dirn     = "LONG" if dev < -3 else "SHORT" if dev > 3 else "WAIT"
+    if dirn == "WAIT":
+        return None
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "source": source_tag, "market": "FO",
+        "strategy": "S1 CALENDAR", "score": score,
+        "direction": dirn, "instrument": "BANKNIFTY",
+        "symbol": "BANKNIFTY", "near_strike": atm, "far_strike": atm,
+        "spread": spread, "fair_value": fair, "deviation": dev,
+        "spot": spot, "vix": None, "regime": "LIVE", "risk": "MEDIUM",
+        "near_ltp": near_ltp, "far_ltp": far_ltp,
+        "near_bid": near_ce.get("bid"), "near_ask": near_ce.get("ask"),
+        "far_bid":  far_ce.get("bid"),  "far_ask":  far_ce.get("ask"),
+        "near_expiry": near_e, "far_expiry": far_e,
+        "pcr": oc.get("pcr"), "support": oc.get("top_pe_oi_strike"),
+        "resistance": oc.get("top_ce_oi_strike"),
+        "reason": f"CE Spread {spread:+.2f} | Fair {fair:+.2f} | Dev {dev:+.2f} [{source_tag}]",
+        "action": f"{dirn} BANKNIFTY Calendar @ {atm}",
+        "event_type": "signal",
+    }
+
+
 def _nse_signal():
-    # Generate live calendar signal. Tries NSE first, falls back to Dhan option chain.
-    # Try Dhan option chain directly if NSE data_provider is unavailable
+    # Generate live calendar signal. Priority: NSE direct → Dhan OC → NseConnector (Node.js)
     if not _NSE_OK or _loader is None or _loader._get_fetcher()._fail_count >= 3:
+        # Path 1: Dhan option chain (requires Dhan Data API subscription)
         try:
             from algo.dhan_data import get_parsed_option_chain
             oc = get_parsed_option_chain("BANKNIFTY")
             if oc and oc.get("spot_price") and oc.get("expiries"):
-                spot = oc["spot_price"]
-                atm  = oc["atm_strike"]
-                expiries = oc["expiries"]
-                if len(expiries) < 2:
-                    return None
-                near_e, far_e = expiries[0], expiries[1]
-                near_ce = oc["chain"].get((atm, near_e), {}).get("CE") or {}
-                far_ce  = oc["chain"].get((atm, far_e),  {}).get("CE") or {}
-                if not (near_ce and far_ce):
-                    return None
-                spread = round((far_ce.get("bid",0) or 0) - (near_ce.get("ask",0) or 0), 2)
-                fair   = round((far_ce.get("theta",0) - near_ce.get("theta",0)) * 0.5, 2) if near_ce.get("theta") else 0
-                dev    = round(spread - fair, 2)
-                score  = min(95, max(30, 50 + int(abs(dev) * 8)))
-                dirn   = "LONG" if dev < -3 else "SHORT" if dev > 3 else "WAIT"
-                if dirn == "WAIT":
-                    return None
-                return {
-                    "timestamp": datetime.now().isoformat(),
-                    "source": "dhan_live", "market": "FO",
-                    "strategy": "S1 CALENDAR", "score": score,
-                    "direction": dirn, "instrument": "BANKNIFTY",
-                    "symbol": "BANKNIFTY", "near_strike": atm, "far_strike": atm,
-                    "spread": spread, "fair_value": fair, "deviation": dev,
-                    "spot": spot, "vix": None, "regime": "LIVE", "risk": "MEDIUM",
-                    "near_bid": near_ce.get("bid"), "near_ask": near_ce.get("ask"),
-                    "far_bid":  far_ce.get("bid"),  "far_ask":  far_ce.get("ask"),
-                    "near_expiry": near_e, "far_expiry": far_e,
-                    "pcr": oc.get("pcr"), "support": oc.get("top_pe_oi_strike"),
-                    "resistance": oc.get("top_ce_oi_strike"),
-                    "reason": f"CE Spread {spread:+.2f} | Fair {fair:+.2f} | Dev {dev:+.2f} [Dhan]",
-                    "action": f"{dirn} BANKNIFTY Calendar @ {atm}",
-                    "event_type": "signal",
-                }
+                sig = _calendar_sig_from_oc(oc, "dhan_live")
+                if sig:
+                    return sig
         except Exception as _de:
             logging.debug(f"[DhanData] signal fallback error: {_de}")
+        # Path 2: NseConnector → stock-nse-india Node.js server on localhost:3000
+        try:
+            from algo.nse_connector import NseConnector
+            _nc = NseConnector()
+            if _nc._connected:
+                oc = _nc.get_option_chain("BANKNIFTY")
+                if oc and oc.get("spot_price") and oc.get("expiries"):
+                    # Convert records list to chain dict for _calendar_sig_from_oc
+                    oc["chain"] = oc.get("records", [])
+                    sig = _calendar_sig_from_oc(oc, "nse_node")
+                    if sig:
+                        logging.info("[NseConnector] Calendar signal via Node.js server")
+                        return sig
+        except Exception as _nc_e:
+            logging.debug(f"[NseConnector] calendar fallback error: {_nc_e}")
         return None
     try:
         df = _loader.get_instruments("BANKNIFTY")
@@ -486,8 +647,75 @@ def _nse_signal():
 _xls_signal = _nse_signal
 
 # ── Multi-strategy bridge — S1-S7 via live NSE option chain ──────────────
+def _run_all_strategies_via_connector() -> list:
+    """Multi-strategy signals via NseConnector (Node.js server). Iron condor + straddle from OC data."""
+    try:
+        from algo.nse_connector import NseConnector
+        import pandas as pd
+        _nc = NseConnector()
+        if not _nc._connected:
+            return []
+        oc = _nc.get_option_chain("NIFTY")
+        if not oc or not oc.get("spot_price"):
+            return []
+        spot     = oc["spot_price"]
+        atm      = oc["atm_strike"]
+        records  = oc.get("records", [])
+        expiries = oc.get("expiries", [])
+        vix      = _latest_indices_map.get("VIX", {}).get("ltp")
+        if not (records and expiries):
+            return []
+        near_exp = expiries[0]
+        # Build rows for near-expiry ATM ± 5 strikes
+        step = 50
+        rows = []
+        for r in records:
+            if r.get("expiry") != near_exp:
+                continue
+            sk = r.get("strike", 0)
+            ce = r.get("CE") or {}; pe = r.get("PE") or {}
+            if not (ce and pe):
+                continue
+            rows.append({
+                "near_strike": sk, "far_strike": sk,
+                "near_ltp": ce.get("ltp", 0), "near_bid": ce.get("bid", 0),
+                "near_ask": ce.get("ask", 0), "near_vol": ce.get("volume", 0),
+                "near_theta": ce.get("theta", 0), "far_theta": ce.get("theta", 0) * 0.7,
+                "near_vega": ce.get("vega", 0), "far_vega": ce.get("vega", 0),
+                "near_delta": ce.get("delta", 0), "far_delta": ce.get("delta", 0) * 0.5,
+                "far_prem": ce.get("ltp", 0) * 1.1, "near_prem": ce.get("ltp", 0),
+                "pe_ltp": pe.get("ltp", 0), "pe_bid": pe.get("bid", 0),
+                "straddle": (ce.get("ltp", 0) + pe.get("ltp", 0)),
+            })
+        if not rows:
+            return []
+        df = pd.DataFrame(rows)
+        from algo.multistrategy import score_iron_condor, score_short_straddle
+        all_r = []
+        for fn, args in [
+            (score_iron_condor,    (df, atm, vix)),
+            (score_short_straddle, (df, atm, vix)),
+        ]:
+            try:
+                all_r.extend(fn(*args) or [])
+            except Exception as e:
+                logging.debug(f"[NseConnector MultiStrat] {fn.__name__}: {e}")
+        sigs = []
+        for r in sorted(all_r, key=lambda x: x.get("score", 0), reverse=True)[:6]:
+            r["source"] = "nse_node"; r["is_live"] = True
+            sigs.append(r)
+        if sigs:
+            logging.info(f"[NseConnector] {len(sigs)} multi-strategy signals via Node.js")
+        return sigs
+    except Exception as e:
+        logging.debug(f"[NseConnector] multi-strategy error: {e}")
+        return []
+
+
 def _run_all_strategies() -> list:
-    if not _NSE_OK or _loader is None: return []
+    if not _NSE_OK or _loader is None:
+        # NSE blocked — try via Node.js server
+        return _run_all_strategies_via_connector()
     try:
         from algo.multistrategy import (
             score_calendar, score_iron_condor, score_short_straddle,
@@ -591,10 +819,68 @@ def _strategy_why(r:dict, vix, spot) -> str:
                 f"Profit in mild directional move. ⚠ Unlimited risk — strict SL needed. {v}")
     return r.get("reason","")
 
+def _pcr_signal_from_oc(oc: dict, instrument: str, vix=None) -> dict:
+    """Build a PCR S5 signal from a parsed option chain dict."""
+    pcr        = oc.get("pcr", 0) or 0
+    spot       = oc.get("spot_price", 0)
+    total_ce   = oc.get("total_ce_oi", 0) or 0
+    total_pe   = oc.get("total_pe_oi", 0) or 0
+    top_ce     = oc.get("top_ce_oi_strike")
+    top_pe     = oc.get("top_pe_oi_strike")
+    if not pcr or not spot:
+        return None
+    if pcr < 0.6:
+        zone = "OVERBOUGHT"; direction = "SHORT"; signal = "BEARISH"
+        score = min(90, int(70 + (0.6 - pcr) * 50))
+        reason = f"PCR {pcr:.3f} < 0.60 — greed zone, fade the crowd"
+    elif pcr > 1.3:
+        zone = "OVERSOLD"; direction = "LONG"; signal = "BULLISH"
+        score = min(90, int(70 + (pcr - 1.3) * 30))
+        reason = f"PCR {pcr:.3f} > 1.30 — fear zone, contrarian long"
+    else:
+        return None  # neutral, no signal
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "source": "nse_node_pcr", "market": "FO",
+        "strategy": "S5 PCR CONTRARIAN", "score": score,
+        "direction": direction, "signal": signal,
+        "instrument": instrument, "symbol": instrument,
+        "pcr_oi": round(pcr, 3), "pcr_volume": None,
+        "total_call_oi": total_ce, "total_put_oi": total_pe,
+        "zone": zone, "spot": spot, "vix": vix,
+        "support": top_pe, "resistance": top_ce, "risk": "MEDIUM",
+        "reason": reason, "action": f"{direction} {instrument} — PCR {pcr:.3f}",
+        "event_type": "signal",
+    }
+
+
 def _pcr_signal_live(vix=None):
-    if not _PCR_OK or not _pcr_strategy: return []
-    try: return _pcr_strategy.generate_all(vix=vix)
-    except Exception as e: logging.warning(f"[PCR] {e}"); return []
+    # Primary: NSE-backed PCR strategy
+    if _PCR_OK and _pcr_strategy:
+        try:
+            sigs = _pcr_strategy.generate_all(vix=vix)
+            if sigs:
+                return sigs
+        except Exception as e:
+            logging.warning(f"[PCR] {e}")
+    # Fallback: NseConnector (stock-nse-india Node.js server on localhost:3000)
+    try:
+        from algo.nse_connector import NseConnector
+        _nc = NseConnector()
+        if _nc._connected:
+            results = []
+            for instr in ["NIFTY", "BANKNIFTY"]:
+                oc = _nc.get_option_chain(instr)
+                if oc:
+                    sig = _pcr_signal_from_oc(oc, instr, vix)
+                    if sig:
+                        results.append(sig)
+            if results:
+                logging.info(f"[NseConnector] {len(results)} PCR signals via Node.js")
+                return results
+    except Exception as _nc_e:
+        logging.debug(f"[NseConnector] PCR fallback error: {_nc_e}")
+    return []
 
 NSE_FO_STOCKS=[
     "ADANIENT","ADANIPORTS","APOLLOHOSP","ASIANPAINT","AXISBANK",
@@ -623,16 +909,36 @@ def _nse_refresh():
         except: pass
 
 def _nse_equity_quote(symbol):
+    """Fetch equity quote. Primary: NSE direct. Fallback: Yahoo Finance (.NS)."""
     _nse_refresh()
     try:
         r=_nse_sess.get(f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",timeout=5)
         pi=r.json().get("priceInfo",{})
-        return {"symbol":symbol,"ltp":float(pi.get("lastPrice") or 0),
-                "change_pct":float(pi.get("pChange") or 0),"open":float(pi.get("open") or 0),
-                "high":float((pi.get("intraDayHighLow") or {}).get("max") or 0),
-                "low":float((pi.get("intraDayHighLow") or {}).get("min") or 0),
-                "prev_close":float(pi.get("previousClose") or 0)}
-    except: return {}
+        ltp=float(pi.get("lastPrice") or 0)
+        if ltp>0:
+            return {"symbol":symbol,"ltp":ltp,
+                    "change_pct":float(pi.get("pChange") or 0),"open":float(pi.get("open") or 0),
+                    "high":float((pi.get("intraDayHighLow") or {}).get("max") or 0),
+                    "low":float((pi.get("intraDayHighLow") or {}).get("min") or 0),
+                    "prev_close":float(pi.get("previousClose") or 0)}
+    except: pass
+    # Yahoo Finance fallback — covers NSE rate-limit / session blocks
+    try:
+        yf_url=f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.NS?interval=1m&range=1d"
+        r2=_req.get(yf_url,headers={"User-Agent":"Mozilla/5.0"},timeout=6)
+        if r2.status_code==200:
+            meta=r2.json()["chart"]["result"][0]["meta"]
+            ltp=float(meta.get("regularMarketPrice") or meta.get("previousClose") or 0)
+            prev=float(meta.get("previousClose") or ltp)
+            ch=round(ltp-prev,2); chp=round((ch/prev*100) if prev else 0,2)
+            if ltp>0:
+                return {"symbol":symbol,"ltp":ltp,"change_pct":chp,
+                        "open":float(meta.get("regularMarketOpen") or ltp),
+                        "high":float(meta.get("regularMarketDayHigh") or ltp),
+                        "low":float(meta.get("regularMarketDayLow") or ltp),
+                        "prev_close":prev}
+    except: pass
+    return {}
 
 _latest_indices_map: Dict[str,dict]={}
 IDX_ORDER=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP","IT"]
@@ -786,8 +1092,10 @@ class Broadcaster:
 broadcaster=Broadcaster()
 
 async def indices_loop():
-    # Indices refresh every 5s — NSE allIndices API.    global _latest_indices_map
+    # Indices refresh every 5s — NSE allIndices API / Yahoo fallback
+    global _latest_indices_map
     while True:
+        indices = []
         try:
             indices = await asyncio.get_event_loop().run_in_executor(None, _fetch_live_indices)
             if indices:
@@ -829,8 +1137,10 @@ async def signal_loop():
     - DEMO_MODE=true in .env: allows mock signals (dev/testing only)
     - Every signal is validated before reaching the frontend
     """
+    global _NSE_OK   # declared here so we can update it based on circuit breaker state
     cycle = 0
     _gold_last_run: float = 0.0   # epoch time of last Gold signal fetch
+    _mcx_last_run:  float = 0.0   # epoch time of last MCX signal fetch
     logging.info("[SignalLoop] Starting — DEMO_MODE=%s", _DEMO_MODE)
 
     # Broadcast initial state so frontend knows we're alive
@@ -879,21 +1189,42 @@ async def signal_loop():
                             logging.info(f"[Gold] {len(gold_sigs)} signal(s) generated")
                 except Exception as _ge:
                     logging.debug(f"[Gold] {_ge}")
+            # MCX commodities — every 5 min, 24/7 (metals trade nearly round the clock)
+            if _MCX_OK and time.time() - _mcx_last_run >= 300:
+                _mcx_last_run = time.time()
+                try:
+                    mcx_sigs = await asyncio.get_event_loop().run_in_executor(None, _generate_mcx_signals)
+                    valid_mcx = [s for s in mcx_sigs if _validate_signal(s)]
+                    for s in valid_mcx:
+                        _db["signals"].append(s)
+                        await broadcaster.broadcast({"type": "signal", "data": s})
+                    if valid_mcx:
+                        _db["signals"] = _db["signals"][-300:]
+                        logging.info(f"[MCX] {len(valid_mcx)} commodity signal(s) generated (pre-market)")
+                except Exception as _me:
+                    logging.debug(f"[MCX] pre-market run error: {_me}")
             continue
 
-        # ── Sync _NSE_OK with NSEFetcher circuit breaker (dynamic recovery) ──
-        global _NSE_OK
+        # ── Sync _NSE_OK with actual data availability (NSE or Dhan fallback) ──
         if _loader is not None:
             try:
                 _fetcher_inst = _loader._get_fetcher()
-                fetcher_ok = (_fetcher_inst._fail_count < 3
-                              or time.time() >= _fetcher_inst._backoff_until)
-                if fetcher_ok and not _NSE_OK:
+                nse_fetcher_ok = (_fetcher_inst._fail_count < 3
+                                  or time.time() >= _fetcher_inst._backoff_until)
+                # Also consider Dhan as a valid live data source
+                try:
+                    from algo.dhan_data import is_available as _dhan_avail
+                    dhan_ok = _dhan_avail()
+                except Exception:
+                    dhan_ok = False
+                data_ok = nse_fetcher_ok or dhan_ok
+                if data_ok and not _NSE_OK:
                     _NSE_OK = True
-                    logging.info("[NSE] Feed recovered — resuming signal generation")
-                elif not fetcher_ok and _NSE_OK:
+                    src = "NSE" if nse_fetcher_ok else "Dhan"
+                    logging.info(f"[DataFeed] Feed live via {src} — resuming signal generation")
+                elif not data_ok and _NSE_OK:
                     _NSE_OK = False
-                    logging.warning(f"[NSE] Circuit breaker active (fail={_fetcher_inst._fail_count}) — pausing until backoff clears")
+                    logging.warning(f"[DataFeed] Both NSE and Dhan unavailable — no signals until recovered")
             except Exception:
                 pass
 
@@ -950,6 +1281,21 @@ async def signal_loop():
             except Exception as _ge:
                 logging.debug(f"[Gold] {_ge}")
 
+        # MCX commodities (GOLD/SILVER/CRUDEOIL/COPPER/NATURALGAS) — every 5 min, 24/7
+        if _MCX_OK and time.time() - _mcx_last_run >= 300:
+            _mcx_last_run = time.time()
+            try:
+                mcx_sigs = await asyncio.get_event_loop().run_in_executor(None, _generate_mcx_signals)
+                valid_mcx = [s for s in mcx_sigs if _validate_signal(s)]
+                for s in valid_mcx:
+                    _db["signals"].append(s)
+                    await broadcaster.broadcast({"type": "signal", "data": s})
+                if valid_mcx:
+                    _db["signals"] = _db["signals"][-300:]
+                    logging.info(f"[MCX] {len(valid_mcx)} commodity signal(s) generated")
+            except Exception as _me:
+                logging.debug(f"[MCX] signal run error: {_me}")
+
         # PCR Contrarian — every 90s (30 cycles × 3s)
         if cycle % 30 == 0 and _PCR_OK:
             vix = _latest_indices_map.get("VIX", {}).get("ltp")
@@ -973,6 +1319,7 @@ async def signal_loop():
                 "dhan_live": _DHAN_OK,
                 "pcr_live":  _PCR_OK,
                 "tl_live":   _TL_OK,
+                "mcx_live":  _MCX_OK,
                 "signals_n": len(_db["signals"]),
                 "timestamp": datetime.now().isoformat(),
             })
@@ -987,6 +1334,7 @@ async def lifespan(app:FastAPI):
             "password":hash_password("demo123"),"plan":"monthly","billing":"monthly",
             "joined":str(date.today()),"daily_target":50000,"plan_expiry":str(date.today()+timedelta(days=30))}
     logging.info("AlgoTrade v3.4 started — http://localhost:8000")
+    _load_broker_credentials()   # load saved broker tokens before anything else
     _load_today_signals()
     if _DHAN_OK:
         # BANKNIFTY spot + near/far CE/PE tokens (standard Dhan security_ids)
@@ -1119,9 +1467,17 @@ def signals_audit():
         "last_signal": eq_today[-1].get("timestamp") if eq_today else None,
     }
 
-    overall = ("ALL_OK" if all(v["status"]=="PRODUCING" for v in strategies_status.values())
-               else "PARTIAL" if live_today > 0
-               else "DOWN")
+    feeds_ok = _NSE_OK  # primary feed health
+    if all(v["status"]=="PRODUCING" for v in strategies_status.values()):
+        overall = "ALL_OK"
+    elif live_today > 0:
+        overall = "PARTIAL"
+    elif not mkt and feeds_ok:
+        overall = "READY"       # market closed but feeds healthy — will work at 9:15 AM
+    elif not feeds_ok:
+        overall = "DOWN"
+    else:
+        overall = "WAITING"     # market open, feeds ok, no signals yet
 
     # Gold feed check (Delta Exchange — no auth needed for prices)
     gold_feed_ok = False
@@ -1167,11 +1523,11 @@ def signals_audit():
         },
         "strategies":        strategies_status,
         "action_required":   (
-            "Start backend before 9:15 AM IST" if not mkt and live_today == 0
+            "OK — signals flowing" if live_today > 0
             else "NSE feed down — check network / NSE rate limits" if not _NSE_OK and mkt
-            else "OK — signals flowing" if live_today > 0
             else "Waiting for first signal of the day" if mkt
-            else "Review today's signals above"
+            else f"System ready — NSE signals will flow from 9:15 AM IST (feeds: NSE={'OK' if _NSE_OK else 'DOWN'}, Dhan={'OK' if _DHAN_OK else 'OFF'}, PCR={'OK' if _PCR_OK else 'OFF'})" if not mkt and feeds_ok
+            else "Start backend before 9:15 AM IST"
         ),
     }
 
@@ -1234,6 +1590,48 @@ def gold_ticker_endpoint():
         return t if t else {"error": "Could not fetch Gold ticker"}
     except Exception as e:
         return {"error": str(e)}
+
+@app.get("/signals/commodity")
+def commodity_signals_endpoint(instrument: str = None, user=Depends(get_optional_user)):
+    """
+    Live MCX commodity signals — GOLD, SILVER, CRUDEOIL, COPPER, NATURALGAS.
+    Data via Yahoo Finance futures; S1 TREND + S2 CALENDAR strategies.
+    Optional ?instrument=GOLD to filter by instrument.
+    """
+    if not _MCX_OK or _generate_mcx_signals is None:
+        return {"signals": [], "count": 0,
+                "message": "MCX module not loaded",
+                "timestamp": datetime.now().isoformat()}
+    try:
+        instruments = [instrument.upper()] if instrument else None
+        sigs  = _generate_mcx_signals(instruments)
+        prices = {}
+        if _get_mcx_prices:
+            try:
+                prices = _get_mcx_prices()
+            except Exception:
+                pass
+        return {
+            "signals":   sigs,
+            "count":     len(sigs),
+            "prices":    prices,
+            "mcx_live":  _MCX_OK,
+            "timestamp": datetime.now().isoformat(),
+            "source":    "yahoo_finance_futures",
+        }
+    except Exception as e:
+        return {"signals": [], "count": 0, "error": str(e),
+                "timestamp": datetime.now().isoformat()}
+
+@app.get("/commodity/prices")
+def commodity_prices_endpoint():
+    """Live MCX commodity prices (GOLD, SILVER, CRUDEOIL, COPPER, NATURALGAS) via Yahoo Finance."""
+    if not _MCX_OK or _get_mcx_prices is None:
+        return {"prices": {}, "message": "MCX module not loaded"}
+    try:
+        return {"prices": _get_mcx_prices(), "timestamp": datetime.now().isoformat()}
+    except Exception as e:
+        return {"prices": {}, "error": str(e)}
 
 @app.post("/signals/fo_ingest")
 async def fo_ingest(req:FoSignalIngest):
@@ -1343,7 +1741,11 @@ def _resample_candles(candles: list, interval_min: int) -> list:
 
 def _fallback_candles(symbol: str, interval: int, n: int = 60) -> list:
     # Realistic fallback using last known LTP as anchor (not random walk from base).
-    BASES = {"NIFTY":24500,"BANKNIFTY":53000,"FINNIFTY":23000,"VIX":14.5}
+    BASES = {
+        "NIFTY":24500, "BANKNIFTY":53000, "FINNIFTY":23000, "VIX":14.5,
+        # Commodity approximate prices (USD) — keeps the fallback chart axis realistic
+        "GOLD":3300.0, "SILVER":31.5, "CRUDEOIL":70.0, "COPPER":4.5, "NATURALGAS":3.0,
+    }
     # Use last known live price as anchor if available
     live = _latest_indices_map.get(symbol, {})
     base = float(live.get("ltp") or BASES.get(symbol, 1000))
@@ -1360,10 +1762,79 @@ def _fallback_candles(symbol: str, interval: int, n: int = 60) -> list:
         price = c
     return candles
 
+# ── MCX commodity chart (Yahoo Finance) ──────────────────────────────────────
+_MCX_CHART_TICKERS = {
+    "GOLD": "GC=F", "SILVER": "SI=F", "CRUDEOIL": "CL=F",
+    "COPPER": "HG=F", "NATURALGAS": "NG=F",
+}
+_MCX_CHART_CACHE: Dict[str, dict] = {}
+_MCX_CHART_TTL = 60   # seconds
+
+def _fetch_mcx_chart(symbol: str, interval_min: int) -> list:
+    """Fetch commodity OHLCV from Yahoo Finance and format for the chart endpoint."""
+    ticker = _MCX_CHART_TICKERS.get(symbol)
+    if not ticker:
+        return []
+    # Map interval to Yahoo Finance range / interval params
+    # Use 5d range so weekends always get last trading day's data (1d returns empty on Sat/Sun)
+    yf_interval = "1m" if interval_min <= 1 else f"{interval_min}m" if interval_min <= 30 else "1h"
+    yf_range    = "5d"
+    try:
+        import requests as _r
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+               f"?interval={yf_interval}&range={yf_range}")
+        r = _r.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        if r.status_code != 200:
+            return []
+        data   = r.json()["chart"]["result"][0]
+        ts_list = data["timestamp"]
+        q       = data["indicators"]["quote"][0]
+        candles = []
+        for i, ts in enumerate(ts_list):
+            try:
+                c = float((q.get("close") or [])[i] or 0)
+                o = float((q.get("open")  or [])[i] or 0)
+                h = float((q.get("high")  or [])[i] or 0)
+                l = float((q.get("low")   or [])[i] or 0)
+                v = float((q.get("volume") or [])[i] or 0)
+                if c > 0:
+                    candles.append({
+                        "time":   datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%S"),
+                        "open":   round(o, 4), "high": round(h, 4),
+                        "low":    round(l, 4), "close": round(c, 4), "volume": int(v),
+                    })
+            except (TypeError, IndexError):
+                continue
+        return candles
+    except Exception as e:
+        logging.debug(f"[MCX Chart] {symbol} fetch error: {e}")
+        return []
+
 @app.get("/chart/{symbol}")
 def get_chart_data(symbol: str, interval: str = "5"):
     symbol = symbol.upper()
     ivl = max(1, int(interval)) if interval.isdigit() else 5
+
+    # ── MCX commodities — serve from Yahoo Finance ──────────────────────────
+    if symbol in _MCX_CHART_TICKERS:
+        cache_key = f"{symbol}_{ivl}"
+        cached = _MCX_CHART_CACHE.get(cache_key)
+        if cached and time.time() - cached["ts"] < _MCX_CHART_TTL:
+            candles = cached["candles"]
+        else:
+            candles = _fetch_mcx_chart(symbol, ivl)
+            if candles:
+                _MCX_CHART_CACHE[cache_key] = {"candles": candles, "ts": time.time()}
+        yf_ok = bool(candles)
+        if not candles:
+            candles = _fallback_candles(symbol, ivl)
+        return {"symbol": symbol, "interval": interval, "candles": candles,
+                "current_price": candles[-1]["close"] if candles else 0,
+                "source": "MCX_YF" if yf_ok else "FALLBACK",
+                "currency": "USD",
+                "timestamp": datetime.now().isoformat()}
+
+    # ── NSE indices / equities — existing logic ──────────────────────────────
     # Return fallback immediately if no cache — don't block the request
     cached = _chart_cache.get(symbol)
     if cached and time.time() - cached["ts"] < _CHART_TTL:
@@ -1805,13 +2276,118 @@ def get_indices():
 _movers_cache: dict = {}
 _movers_ts: float = 0.0
 
+def _fetch_yahoo_movers() -> dict:
+    """Fetch top gainers/losers via Yahoo Finance — handles crumb auth + yfinance fallback."""
+    import requests as _r
+    _YF_STOCKS = [
+        "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS",
+        "BHARTIARTL.NS","SBIN.NS","KOTAKBANK.NS","LT.NS","AXISBANK.NS",
+        "TITAN.NS","BAJFINANCE.NS","WIPRO.NS","SUNPHARMA.NS","MARUTI.NS",
+        "NTPC.NS","TATAMOTORS.NS","TATASTEEL.NS","HINDALCO.NS","JSWSTEEL.NS",
+        "HCLTECH.NS","TECHM.NS","ONGC.NS","BPCL.NS","POWERGRID.NS",
+        "DRREDDY.NS","CIPLA.NS","DIVISLAB.NS","APOLLOHOSP.NS","TRENT.NS",
+    ]
+    HDR = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://finance.yahoo.com/",
+    }
+
+    def _parse_stocks(results):
+        stocks = []
+        for q in results:
+            ltp  = float(q.get("regularMarketPrice") or 0)
+            prev = float(q.get("regularMarketPreviousClose") or ltp)
+            if not ltp:
+                continue
+            sym = q.get("symbol", "").replace(".NS", "")
+            chg_p = round(float(q.get("regularMarketChangePercent") or 0), 2)
+            chg   = round(float(q.get("regularMarketChange") or 0), 2)
+            stocks.append({
+                "symbol": sym, "ltp": round(ltp, 2),
+                "change_pct": chg_p, "change": chg,
+                "high": float(q.get("regularMarketDayHigh") or ltp),
+                "low":  float(q.get("regularMarketDayLow")  or ltp),
+                "prev_close": round(prev, 2),
+                "volume": int(q.get("regularMarketVolume") or 0),
+                "_src": "yahoo",
+            })
+        return stocks
+
+    syms_str = ",".join(_YF_STOCKS)
+    fields = "regularMarketPrice,regularMarketPreviousClose,regularMarketChangePercent,regularMarketChange,regularMarketDayHigh,regularMarketDayLow,regularMarketVolume"
+
+    # ── Attempt 1: crumb-authenticated v7 API ──────────────────────────────
+    try:
+        sess = _r.Session()
+        sess.headers.update(HDR)
+        # Get cookie
+        sess.get("https://fc.yahoo.com", timeout=5)
+        # Get crumb
+        crumb_r = sess.get("https://query1.finance.yahoo.com/v1/test/getcrumb", timeout=5)
+        crumb = crumb_r.text.strip() if crumb_r.status_code == 200 else None
+        url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={syms_str}&fields={fields}"
+        if crumb:
+            url += f"&crumb={crumb}"
+        r = sess.get(url, timeout=12)
+        if r.status_code == 200:
+            results = r.json().get("quoteResponse", {}).get("result", [])
+            stocks = _parse_stocks(results)
+            if stocks:
+                gainers = sorted([s for s in stocks if s["change_pct"] > 0],
+                                 key=lambda x: x["change_pct"], reverse=True)[:8]
+                losers  = sorted([s for s in stocks if s["change_pct"] < 0],
+                                 key=lambda x: x["change_pct"])[:8]
+                logging.info(f"[Yahoo Movers] {len(gainers)}g/{len(losers)}l via crumb API")
+                return {"gainers": gainers, "losers": losers}
+        logging.debug(f"[Yahoo Movers] crumb API HTTP {r.status_code}")
+    except Exception as e:
+        logging.debug(f"[Yahoo Movers] crumb attempt failed: {e}")
+
+    # ── Attempt 2: yfinance library (handles auth internally) ───────────────
+    try:
+        import yfinance as yf
+        tickers = yf.Tickers(" ".join(_YF_STOCKS))
+        stocks = []
+        for sym_ns, t in tickers.tickers.items():
+            try:
+                info = t.fast_info
+                ltp  = float(getattr(info, "last_price", 0) or 0)
+                prev = float(getattr(info, "previous_close", ltp) or ltp)
+                if not ltp:
+                    continue
+                chg_p = round((ltp - prev) / prev * 100, 2) if prev else 0
+                stocks.append({
+                    "symbol": sym_ns.replace(".NS",""), "ltp": round(ltp,2),
+                    "change_pct": chg_p, "change": round(ltp-prev,2),
+                    "high": float(getattr(info,"day_high",ltp) or ltp),
+                    "low":  float(getattr(info,"day_low",ltp) or ltp),
+                    "prev_close": round(prev,2), "volume": 0, "_src": "yfinance",
+                })
+            except Exception:
+                pass
+        if stocks:
+            gainers = sorted([s for s in stocks if s["change_pct"] > 0],
+                             key=lambda x: x["change_pct"], reverse=True)[:8]
+            losers  = sorted([s for s in stocks if s["change_pct"] < 0],
+                             key=lambda x: x["change_pct"])[:8]
+            logging.info(f"[Yahoo Movers] {len(gainers)}g/{len(losers)}l via yfinance")
+            return {"gainers": gainers, "losers": losers}
+    except Exception as e:
+        logging.debug(f"[Yahoo Movers] yfinance fallback failed: {e}")
+
+    return {}
+
+
 def _fetch_movers() -> dict:
-    # Fetch top gainers/losers from NSE equity market API. Cached 60 seconds.
+    # Fetch top gainers/losers — NSE primary, Yahoo Finance fallback.
     global _movers_cache, _movers_ts
     if _movers_cache and time.time() - _movers_ts < 60:
         return _movers_cache
+
+    # ── Source 1: NSE equity-stockIndices (fastest, pre-computed) ────────────
     try:
-        # NSE provides pre-computed gainers/losers — no per-stock calls needed
         raw = _nsefetch("https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O")
         data = raw.get("data", [])
         stocks = []
@@ -1840,21 +2416,17 @@ def _fetch_movers() -> dict:
     except Exception as e:
         logging.debug(f"[Movers] NSE fetch failed: {e}")
 
-    # Fallback: derive from existing equity signals in DB
-    eq = [s for s in _db["signals"] if s.get("market") == "EQUITY"]
-    if not eq:
-        eq = generate_equity_signals(top_n=20)
-    by_sym: dict = {}
-    for s in eq:
-        sym = s.get("symbol")
-        if sym and sym not in by_sym:
-            by_sym[sym] = s
-    sigs = list(by_sym.values())
-    gainers = sorted([s for s in sigs if (s.get("change_pct") or 0) > 0],
-                     key=lambda x: x.get("change_pct", 0), reverse=True)[:8]
-    losers  = sorted([s for s in sigs if (s.get("change_pct") or 0) < 0],
-                     key=lambda x: x.get("change_pct", 0))[:8]
-    return {"gainers": gainers, "losers": losers}
+    # ── Source 2: Yahoo Finance (works even when NSE is blocked) ─────────────
+    try:
+        yf = _fetch_yahoo_movers()
+        if yf:
+            _movers_cache = yf
+            _movers_ts = time.time()
+            return _movers_cache
+    except Exception as e:
+        logging.debug(f"[Movers] Yahoo fallback failed: {e}")
+
+    return {"gainers": [], "losers": []}
 
 @app.get("/movers")
 def get_movers():
@@ -2156,6 +2728,8 @@ def update_dhan_token(req: DhanTokenRequest, user=Depends(get_current_user)):
         save_token_manual(req.client_id.strip(), req.access_token.strip())
         os.environ["DHAN_CLIENT_ID"]    = req.client_id.strip()
         os.environ["DHAN_ACCESS_TOKEN"] = req.access_token.strip()
+        _write_env_vars({"DHAN_CLIENT_ID": req.client_id.strip(),
+                         "DHAN_ACCESS_TOKEN": req.access_token.strip()})
         valid = validate_token()
         _DHAN_OK = valid
         # Re-start ticker with updated credentials
@@ -2167,7 +2741,7 @@ def update_dhan_token(req: DhanTokenRequest, user=Depends(get_current_user)):
                 pass
         return {"ok": True, "valid": valid,
                 "client_id": req.client_id.strip(),
-                "message": "Token saved and validated ✓" if valid else "Token saved but validation failed — may be expired"}
+                "message": "Token saved to .env and validated ✓" if valid else "Token saved to .env — may be expired"}
     except Exception as e:
         raise HTTPException(500, f"Failed to save token: {e}")
 
@@ -2216,14 +2790,93 @@ def dhan_status():
     return {"has_token": bool(token), "client_id": client_id,
             "expiry": expiry, "expired": expired, "dhan_live": _DHAN_OK}
 
+@app.post("/broker/credentials/{broker}")
+def save_broker_credentials(broker: str, req: BrokerCredsRequest, user=Depends(get_current_user)):
+    """Hot-save credentials for kite | upstox | delta | dhan without server restart."""
+    global _DHAN_OK
+    broker = broker.lower()
+    allowed = ["dhan", "kite", "upstox", "delta"]
+    if broker not in allowed:
+        raise HTTPException(400, f"Unknown broker '{broker}'. Must be one of: {allowed}")
+
+    saved = {}
+    message = ""
+
+    if broker == "dhan":
+        client_id    = (req.client_id    or "").strip()
+        access_token = (req.access_token or "").strip()
+        if not access_token:
+            raise HTTPException(400, "access_token is required for Dhan")
+        if client_id:
+            os.environ["DHAN_CLIENT_ID"] = client_id
+        os.environ["DHAN_ACCESS_TOKEN"] = access_token
+        _DHAN_OK = True
+        env_update = {"DHAN_ACCESS_TOKEN": access_token}
+        if client_id:
+            env_update["DHAN_CLIENT_ID"] = client_id
+        _write_env_vars(env_update)
+        saved = {"client_id": client_id, "access_token": access_token}
+        message = "Dhan credentials saved to .env"
+
+    elif broker == "kite":
+        api_key      = (req.api_key      or "").strip()
+        access_token = (req.access_token or "").strip()
+        if not api_key or not access_token:
+            raise HTTPException(400, "api_key and access_token are required for Kite")
+        os.environ["KITE_API_KEY"]      = api_key
+        os.environ["KITE_ACCESS_TOKEN"] = access_token
+        _write_env_vars({"KITE_API_KEY": api_key, "KITE_ACCESS_TOKEN": access_token})
+        saved = {"api_key": api_key, "access_token": access_token}
+        message = "Kite credentials saved to .env"
+
+    elif broker == "upstox":
+        api_key      = (req.api_key      or "").strip()
+        api_secret   = (req.api_secret   or "").strip()
+        access_token = (req.access_token or "").strip()
+        if not api_key or not api_secret:
+            raise HTTPException(400, "api_key and api_secret are required for Upstox")
+        os.environ["UPSTOX_API_KEY"]      = api_key
+        os.environ["UPSTOX_API_SECRET"]   = api_secret
+        if access_token:
+            os.environ["UPSTOX_ACCESS_TOKEN"] = access_token
+        env_update = {"UPSTOX_API_KEY": api_key, "UPSTOX_API_SECRET": api_secret}
+        if access_token:
+            env_update["UPSTOX_ACCESS_TOKEN"] = access_token
+        _write_env_vars(env_update)
+        saved = {"api_key": api_key, "api_secret": api_secret, "access_token": access_token}
+        message = "Upstox credentials saved to .env"
+
+    elif broker == "delta":
+        api_key    = (req.api_key    or "").strip()
+        api_secret = (req.api_secret or "").strip()
+        if not api_key or not api_secret:
+            raise HTTPException(400, "api_key and api_secret are required for Delta Exchange")
+        os.environ["DELTA_API_KEY"]    = api_key
+        os.environ["DELTA_API_SECRET"] = api_secret
+        _write_env_vars({"DELTA_API_KEY": api_key, "DELTA_API_SECRET": api_secret})
+        saved = {"api_key": api_key, "api_secret": api_secret}
+        message = "Delta Exchange credentials saved to .env"
+
+    _save_broker_credentials(broker, saved)
+    return {"ok": True, "broker": broker, "message": message, "env_written": True}
+
+@app.get("/broker/credentials/status")
+def broker_credentials_status(user=Depends(get_optional_user)):
+    def _field(env_key: str) -> dict:
+        val = os.environ.get(env_key, "").strip()
+        return {"set": bool(val), "masked": _mask(val) if val else ""}
+    return {
+        "dhan": {"client_id": _field("DHAN_CLIENT_ID"), "access_token": _field("DHAN_ACCESS_TOKEN"), "connected": _DHAN_OK},
+        "kite": {"api_key": _field("KITE_API_KEY"), "access_token": _field("KITE_ACCESS_TOKEN"), "connected": bool(os.environ.get("KITE_ACCESS_TOKEN"))},
+        "upstox": {"api_key": _field("UPSTOX_API_KEY"), "api_secret": _field("UPSTOX_API_SECRET"), "access_token": _field("UPSTOX_ACCESS_TOKEN"), "connected": bool(os.environ.get("UPSTOX_ACCESS_TOKEN"))},
+        "delta": {"api_key": _field("DELTA_API_KEY"), "api_secret": _field("DELTA_API_SECRET"), "connected": bool(os.environ.get("DELTA_API_KEY"))},
+    }
+
 @app.get("/health")
 def health_check():
-    return {"status":"ok","version":"3.4.0","users":len(_db["users"]),
-            "signals":len(_db["signals"]),
-            "nse_live":_NSE_OK,
-            "dhan_live":_DHAN_OK,
-            "xls_live":False,
-            "pcr_live":_PCR_OK,"tl_live":_TL_OK,"timestamp":datetime.now().isoformat()}
+    return {"status":"ok","version":"3.4.0","users":len(_db["users"]),"signals":len(_db["signals"]),
+            "nse_live":_NSE_OK,"dhan_live":_DHAN_OK,"xls_live":False,
+            "pcr_live":_PCR_OK,"tl_live":_TL_OK,"mcx_live":_MCX_OK,"timestamp":datetime.now().isoformat()}
 
 @app.get("/")
 def root(): return {"message":"AlgoTrade API v3.4 -- NSE Direct + Dhan + Yahoo","docs":"/docs","health":"/health"}

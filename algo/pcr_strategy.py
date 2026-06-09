@@ -11,11 +11,24 @@ Run standalone:  python pcr_strategy.py
 Or import:       from pcr_strategy import PCRStrategy
 """
 
+import os
+import sys
 import time
 import logging
 import requests
 from datetime import datetime
 from typing import Optional, Dict, Any
+
+# Dhan fallback import (path-agnostic)
+try:
+    from algo.dhan_data import get_pcr as _dhan_pcr, _get_raw_cached as _dhan_raw
+except ImportError:
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from dhan_data import get_pcr as _dhan_pcr, _get_raw_cached as _dhan_raw
+    except ImportError:
+        _dhan_pcr = None
+        _dhan_raw = None
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("PCR")
@@ -112,9 +125,48 @@ class NseOiFetcher:
         except Exception as e:
             self._fail_count += 1
             if self._fail_count == 1:
-                log.warning(f"[PCR] NSE OI unavailable for {symbol} — will retry in 5 min")
+                log.warning(f"[PCR] NSE OI unavailable for {symbol} — trying Dhan fallback")
             if self._fail_count >= 3:
                 self._backoff_until = time.time() + 300
+            return self._fetch_oi_pcr_dhan(symbol)
+
+    def _fetch_oi_pcr_dhan(self, symbol: str = "NIFTY") -> Optional[Dict[str, Any]]:
+        """Dhan option chain fallback for PCR when NSE is blocked."""
+        if _dhan_raw is None:
+            return None
+        try:
+            raw = _dhan_raw(symbol)
+            if not raw or "data" not in raw:
+                return None
+            data   = raw["data"]
+            oc_map = data.get("oc", {})
+            spot   = float(data.get("underlying_ltp") or 0)
+            ce_oi = pe_oi = ce_vol = pe_vol = 0
+            for exp, strikes in oc_map.items():
+                for sk, sides in strikes.items():
+                    ce = sides.get("call_options") or sides.get("CE") or {}
+                    pe = sides.get("put_options")  or sides.get("PE") or {}
+                    ce_oi  += int(ce.get("oi")     or 0)
+                    pe_oi  += int(pe.get("oi")     or 0)
+                    ce_vol += int(ce.get("volume") or 0)
+                    pe_vol += int(pe.get("volume") or 0)
+            pcr_oi  = round(pe_oi  / ce_oi,  4) if ce_oi  > 0 else None
+            pcr_vol = round(pe_vol / ce_vol, 4) if ce_vol > 0 else None
+            log.info(f"[PCR] Dhan fallback {symbol} — PCR_OI={pcr_oi}  spot={spot}")
+            return {
+                "symbol":        symbol,
+                "spot":          round(spot, 2),
+                "pcr_oi":        pcr_oi,
+                "pcr_volume":    pcr_vol,
+                "total_put_oi":  pe_oi,
+                "total_call_oi": ce_oi,
+                "total_put_vol": pe_vol,
+                "total_call_vol":ce_vol,
+                "timestamp":     datetime.now().isoformat(),
+                "source":        "dhan_fallback",
+            }
+        except Exception as e:
+            log.error(f"[PCR] Dhan fallback error for {symbol}: {e}")
             return None
 
 

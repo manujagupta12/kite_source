@@ -103,7 +103,7 @@ class NSEFetcher:
     # ── Public API ────────────────────────────────────────────
 
     def get_vix(self) -> Optional[float]:
-        """Fetch India VIX from NSE allIndices endpoint."""
+        """Fetch India VIX — NSE primary, Yahoo Finance fallback."""
         self._ensure_session()
         try:
             r = self._session.get(_BASE + _ALL_INDICES, timeout=8)
@@ -112,8 +112,18 @@ class NSEFetcher:
                 if "INDIA VIX" in str(item.get("index", "")).upper():
                     return round(float(item["last"]), 2)
         except Exception as e:
-            print(f"[NSEFetcher] VIX error: {e}")
+            print(f"[NSEFetcher] VIX NSE error: {e} — trying Yahoo Finance fallback")
             self._init_session()
+        # Fallback: Yahoo Finance (free, no NSE auth required)
+        try:
+            import yfinance as yf
+            hist = yf.Ticker("^INDIAVIX").history(period="1d", interval="1m")
+            if not hist.empty:
+                vix = round(float(hist["Close"].iloc[-1]), 2)
+                print(f"[NSEFetcher] VIX via Yahoo Finance: {vix}")
+                return vix
+        except Exception as e2:
+            print(f"[NSEFetcher] VIX Yahoo fallback error: {e2}")
         return None
 
     def get_expiry_dates(self, symbol: str) -> list[str]:
@@ -326,12 +336,13 @@ class NSEFetcher:
         """Fetch raw option chain JSON with circuit breaker to prevent 404 spam."""
         sym = symbol.upper()
 
-        # Circuit breaker — back off for 5 min after 3 consecutive failures
+        # Circuit breaker — back off for 90s after 3 consecutive failures
         if self._fail_count >= 3:
             if time.time() < self._backoff_until:
                 return None  # silent — already logged
             else:
                 self._fail_count = 0  # reset after backoff
+                self._init_session()  # fresh cookies on every recovery attempt
 
         # Primary: nsepython
         try:
@@ -360,9 +371,9 @@ class NSEFetcher:
         # Both failed
         self._fail_count += 1
         if self._fail_count == 1:
-            print(f"[NSEFetcher] Option chain unavailable for {sym} — NSE may be blocking. Retrying in 5 min.")
+            print(f"[NSEFetcher] Option chain unavailable for {sym} — NSE may be blocking. Retrying in 90s.")
         if self._fail_count >= 3:
-            self._backoff_until = time.time() + 300  # 5 min backoff — stop hammering NSE
+            self._backoff_until = time.time() + 90  # 90s backoff (was 5 min — too slow to recover)
         return None
 
 

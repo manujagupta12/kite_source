@@ -36,3 +36,4 @@ nsepython==0.0.955
 
 # ── Optional: Upstox (we use REST directly, SDK not needed) ───
 # upstox-python-sdk
+yfinance>=0.2.40

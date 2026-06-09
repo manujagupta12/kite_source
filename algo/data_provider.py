@@ -30,6 +30,20 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from algo.nse_fetcher   import NSEFetcher, get_fetcher
 from algo.dhan_ticker   import get_tick_store, TickStore
 from algo.bhavcopy_loader import BhavcopyCatalog, get_catalog
+from algo.dhan_data import (
+    get_nse_compatible_chain as _dhan_chain,
+    get_expiry_dates         as _dhan_expiries,
+    is_available             as _dhan_available,
+)
+# Market Feed direct import — used when Dhan paid OC is disabled but trading token is valid
+try:
+    from algo.dhan_market_feed import (
+        get_option_chain  as _mf_chain,
+        get_expiry_dates  as _mf_expiries,
+        is_available      as _mf_available,
+    )
+except ImportError:
+    _mf_chain = _mf_expiries = _mf_available = None  # type: ignore
 
 # ── Configuration ─────────────────────────────────────────────
 DEFAULT_SYMBOL      = "BANKNIFTY"
@@ -79,6 +93,8 @@ def _get_chain(
 ) -> dict:
     """
     Fetch (or return cached) option chain.
+    Primary: Dhan API (authenticated, reliable).
+    Fallback: NSE Direct API.
     Returns dict: {'near': chain_dict, 'far': chain_dict,
                    'near_expiry': str, 'far_expiry': str,
                    'underlying': float, 'expiry_dates': list}
@@ -89,6 +105,59 @@ def _get_chain(
     if now - _chain_cache_ts < _CACHE_TTL_SEC and _chain_cache:
         return _chain_cache
 
+    # ── Primary: Dhan Data API (paid OC) or Market Feed (free) ──
+    # _dhan_chain() internally tries paid OC first, then falls to market feed
+    if _dhan_available():
+        expiries = _dhan_expiries(symbol)
+        if expiries:
+            near_expiry = expiries[near_idx] if len(expiries) > near_idx else expiries[0]
+            far_expiry  = expiries[far_idx]  if len(expiries) > far_idx  else expiries[-1]
+            near_result = _dhan_chain(symbol, expiry=near_expiry)
+            far_result  = _dhan_chain(symbol, expiry=far_expiry)
+            if near_result and near_result.get("chain"):
+                src = near_result.get("_src", "dhan")
+                _chain_cache = {
+                    "near":         near_result.get("chain", {}),
+                    "far":          far_result.get("chain",  {}),
+                    "near_expiry":  near_expiry,
+                    "far_expiry":   far_expiry,
+                    "underlying":   near_result.get("underlying", 0),
+                    "expiry_dates": expiries,
+                    "timestamp":    near_result.get("timestamp", ""),
+                    "_src":         src,
+                }
+                _chain_cache_ts = now
+                print(f"[DataProvider] ✅ Chain from {src} — {symbol} spot={near_result.get('underlying')}")
+                return _chain_cache
+
+    # ── Secondary: Market Feed direct (in case dhan_data import path fails) ─
+    if _mf_available and _mf_available():
+        expiries = _mf_expiries(symbol) if _mf_expiries else []
+        if expiries:
+            near_expiry = expiries[near_idx] if len(expiries) > near_idx else expiries[0]
+            far_expiry  = expiries[far_idx]  if len(expiries) > far_idx  else expiries[-1]
+            near_result = _mf_chain(symbol) if _mf_chain else {}
+            if near_result and near_result.get("chain"):
+                # Filter far expiry
+                far_chain = {k: v for k, v in near_result.get("chain", {}).items()
+                             if v.get("expiry") == far_expiry}
+                near_chain = {k: v for k, v in near_result.get("chain", {}).items()
+                              if v.get("expiry") == near_expiry}
+                _chain_cache = {
+                    "near":         near_chain,
+                    "far":          far_chain,
+                    "near_expiry":  near_expiry,
+                    "far_expiry":   far_expiry,
+                    "underlying":   near_result.get("underlying", 0),
+                    "expiry_dates": expiries,
+                    "timestamp":    near_result.get("timestamp", ""),
+                    "_src":         "dhan_mktfeed",
+                }
+                _chain_cache_ts = now
+                print(f"[DataProvider] ✅ Chain from dhan_mktfeed — {symbol} spot={near_result.get('underlying')}")
+                return _chain_cache
+
+    # ── Fallback: NSE Direct API ─────────────────────────────────
     fetcher = _get_fetcher()
     expiries = fetcher.get_expiry_dates(symbol)
     if not expiries:
@@ -108,6 +177,7 @@ def _get_chain(
         "underlying":   near_result.get("underlying", 0),
         "expiry_dates": expiries,
         "timestamp":    near_result.get("timestamp", ""),
+        "_src":         "nse",
     }
     _chain_cache_ts = now
     return _chain_cache

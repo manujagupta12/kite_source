@@ -53,8 +53,11 @@ except ImportError:
 # ════════════════════════════════════════════════════════════════
 #  SETTINGS
 # ════════════════════════════════════════════════════════════════
-FILEPATH        = r"C:\AlgoTrading\data\multitrade_feed.xls"
-TEMPPATH        = r"C:\AlgoTrading\data\_temp_read.xls"
+# XLS feed removed — standalone mode no longer supported.
+# The backend uses data_provider (NSE Direct API) via _run_all_strategies() in main.py.
+# Run the dashboard instead: restart_backend.bat + start.bat
+FILEPATH        = None  # deprecated — multitrade_feed.xls deleted
+TEMPPATH        = None  # deprecated
 
 MARGIN_BUDGET   = 5_000_000  # ₹50 lakh — full capital deployed every day
 LOT_SIZES       = {"NIFTY": 25, "BANKNIFTY": 15, "FINNIFTY": 40}
@@ -548,163 +551,165 @@ def print_alert(o, vix, regime_key=None):
   → Ctrl+C to log this trade
 🔔""")
 
-# ════════════════════════════════════════════════════════════════
-#  MAIN
-# ════════════════════════════════════════════════════════════════
-print(f"""
-╔══════════════════════════════════════════════════════════════════════╗
-║  MULTI-STRATEGY SYSTEM  |  {ts()}
-║  7 Strategies | All market conditions | Dynamic position sizing
-║  Lots vary by signal score, VIX, regime, margin, and win/loss streak
-║  Press Ctrl+C at any time to log trades / update margin / check P&L
-╚══════════════════════════════════════════════════════════════════════╝
-  File: {FILEPATH}  |  Logs: C:\\AlgoTrading\\logs\\
-""")
 
-logger.load_today()
-realised,_,total = logger.get_daily_pnl()
-print(f"  Today's P&L loaded: ₹{realised:+,.0f}  ({total} trades)")
+if __name__ == "__main__":
+    # ════════════════════════════════════════════════════════════════
+    #  MAIN
+    # ════════════════════════════════════════════════════════════════
+    print(f"""
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║  MULTI-STRATEGY SYSTEM  |  {ts()}
+    ║  7 Strategies | All market conditions | Dynamic position sizing
+    ║  Lots vary by signal score, VIX, regime, margin, and win/loss streak
+    ║  Press Ctrl+C at any time to log trades / update margin / check P&L
+    ╚══════════════════════════════════════════════════════════════════════╝
+      File: {FILEPATH}  |  Logs: C:\\AlgoTrading\\logs\\
+    """)
 
-# Initialise dynamic position sizer
-_sizer = None
-if _sizer_available:
-    _sizer = PositionSizer()
-else:
-    print("  Running with fixed 1 lot — add position_sizer.py for dynamic sizing.")
+    logger.load_today()
+    realised,_,total = logger.get_daily_pnl()
+    print(f"  Today's P&L loaded: ₹{realised:+,.0f}  ({total} trades)")
 
-if "--input" in sys.argv:
-    logger.interactive_input()
+    # Initialise dynamic position sizer
+    _sizer = None
+    if _sizer_available:
+        _sizer = PositionSizer()
+    else:
+        print("  Running with fixed 1 lot — add position_sizer.py for dynamic sizing.")
 
-print(f"\n  [{ts()}] Fetching VIX...")
-v=fetch_vix(); state["vix"]=v
-print(f"  [{ts()}] VIX={v}\n" if v else f"  [{ts()}] VIX unavailable\n")
+    if "--input" in sys.argv:
+        logger.interactive_input()
 
-cycle=0; vix_countdown=0; last_analysis=0
+    print(f"\n  [{ts()}] Fetching VIX...")
+    v=fetch_vix(); state["vix"]=v
+    print(f"  [{ts()}] VIX={v}\n" if v else f"  [{ts()}] VIX unavailable\n")
 
-while True:
-    try:
-        cycle+=1; vix_countdown+=1
-        if vix_countdown>=20:
-            v=fetch_vix()
-            if v and v!=state["vix"]:
-                print(f"\n  [{ts()}] VIX: {state['vix']} → {v}")
-                state["vix"]=v
-            vix_countdown=0
+    cycle=0; vix_countdown=0; last_analysis=0
 
-        raw=safe_read()
-        if raw is None:
-            state["fail"]+=1
-            if state["fail"]%5==1: print(f"  [{ts()}] Waiting... {state['fail']}")
-            time.sleep(REFRESH); continue
-        state["fail"]=0
-
-        meta=read_metadata(raw)
-        if meta["spot"]:     state["spot"]    =meta["spot"]
-        if meta["near_exp"]: state["near_exp"]=meta["near_exp"]
-        if meta["far_exp"]:  state["far_exp"] =meta["far_exp"]
-
-        main_df=read_main_table(raw); _,far_pe_df=read_secondary_table(raw)
-        if main_df is None or main_df.empty:
-            print(f"  [{ts()}] No data..."); time.sleep(REFRESH); continue
-
-        atm=detect_atm(state["spot"],main_df)
-        if atm and atm!=state["atm"]:
-            state["atm"]=atm
-            print(f"\n  [{ts()}] ATM:{atm}  Spot:{state['spot']}")
-
-        vix=state["vix"]; spot=state["spot"]; strike=state["atm"]
-        if not strike: time.sleep(REFRESH); continue
-
-        # ── REGIME DETECTION every cycle ────────────────────────
-        regime_full = None
-        if _regime_available and _regime_engine:
-            regime_full = _regime_engine.detect(
-                main_df, vix, state["spot"], state["near_exp"], strike)
-
-        # Print regime report on change
-        if regime_full and _regime_engine.changed():
-            print_regime_report(regime_full)
-            _regime_engine.mark_printed()
-            if regime_full["key"] == "R8_EXTREME_PANIC":
-                print(f"\n  [{ts()}] 💀 EXTREME PANIC — All new signals suppressed.")
-            elif regime_full["key"] == "R1_DEAD":
-                print(f"\n  [{ts()}] 🔴 DEAD MARKET — Calendar spread edge is NEGATIVE. "
-                      f"Showing safe alternatives only.")
-
-        # Also run simple regime for display (backward compat)
-        regime = detect_regime(vix, state["near_exp"])
-
-        now=time.time()
-        if (now-last_analysis)>=ANALYSIS_EVERY:
-            all_opps=run_all(main_df,far_pe_df,strike,vix,spot,state["near_exp"])
-
-            # Apply deep regime filter
-            if regime_full and _regime_available:
-                all_opps = filter_by_regime(all_opps, regime_full)
-                mult = regime_full.get("size_mult", 1.0)
-                if mult < 1.0:
-                    print(f"\n  [{ts()}] ⚠  SIZE OVERRIDE: {mult*100:.0f}% "
-                          f"({regime_full['name']})")
-
-            print_analysis(all_opps, regime, vix)
-            last_analysis=now
-
-            unblocked = [o for o in all_opps if not o.get("regime_blocked", False)]
-            if unblocked:
-                top=unblocked[0]
-                ak=f"{top['strategy']}_{top.get('near_strike',top.get('strike',''))}"
-                mult = regime_full.get("size_mult",1.0) if regime_full else 1.0
-                if top["score"]>=IMMEDIATE_SCORE and ak not in state["alerted"]:
-                    if mult == 0.0:
-                        print(f"  [{ts()}] 💀 Signal suppressed — regime blocks all entries")
-                    else:
-                        regime_key_for_alert = regime_full.get("key") if regime_full else None
-                        print_alert(top, vix, regime_key_for_alert)
-                    state["alerted"].add(ak)
-
-        # Live tick
-        row=main_df[main_df["near_strike"]==strike]
-        if not row.empty:
-            try:
-                ce_sp=round(float(row["far_prem"].iloc[0])-float(row["near_ask"].iloc[0]),2)
-                st=float(row["straddle"].iloc[0])
-                realised,open_c,_=logger.get_daily_pnl()
-                regime_line = regime_summary_line(regime_full) if regime_full and _regime_available else risk_icon(vix)
-                print(f"  [{ts()}]  ATM:{strike}  CE:{ce_sp:+.2f}  "
-                      f"Straddle:{st:.2f}  VIX:{vix}  "
-                      f"P&L:₹{realised:+,.0f}  {regime_line}")
-            except: pass
-
-        if cycle%10==0:
-            if _sizer_available and _sizer:
-                _sizer.show_status()
-            else:
-                realised,open_c,_=logger.get_daily_pnl()
-                print(f"  [{ts()}]  P&L:₹{realised:+,.0f}  Open:{open_c}")
-
-        time.sleep(REFRESH)
-
-    except KeyboardInterrupt:
-        print(f"\n\n  [{ts()}] Paused — what would you like to do?")
-        print("    [1] Log a trade entry")
-        print("    [2] Close a trade / log exit")
-        print("    [3] Update available margin")
-        print("    [4] Show today's P&L summary")
-        print("    [5] Resume algo")
+    while True:
         try:
-            choice = input("  Choice: ").strip()
-        except EOFError:
-            choice = "5"
-        if choice == "1":
-            logger.interactive_input("Enter Trade")
-        elif choice == "2":
-            logger.interactive_input("Close Trade")
-        elif choice == "3" and _sizer_available and _sizer:
-            _sizer.update_margin()
-        elif choice == "4":
-            logger.print_daily_summary()
-            if _sizer_available and _sizer:
-                _sizer.show_status()
-        print(f"\n  [{ts()}] Resuming...\n")
-    except Exception as e:
-        print(f"  [{ts()}] Error: {e}"); time.sleep(REFRESH)
+            cycle+=1; vix_countdown+=1
+            if vix_countdown>=20:
+                v=fetch_vix()
+                if v and v!=state["vix"]:
+                    print(f"\n  [{ts()}] VIX: {state['vix']} → {v}")
+                    state["vix"]=v
+                vix_countdown=0
+
+            raw=safe_read()
+            if raw is None:
+                state["fail"]+=1
+                if state["fail"]%5==1: print(f"  [{ts()}] Waiting... {state['fail']}")
+                time.sleep(REFRESH); continue
+            state["fail"]=0
+
+            meta=read_metadata(raw)
+            if meta["spot"]:     state["spot"]    =meta["spot"]
+            if meta["near_exp"]: state["near_exp"]=meta["near_exp"]
+            if meta["far_exp"]:  state["far_exp"] =meta["far_exp"]
+
+            main_df=read_main_table(raw); _,far_pe_df=read_secondary_table(raw)
+            if main_df is None or main_df.empty:
+                print(f"  [{ts()}] No data..."); time.sleep(REFRESH); continue
+
+            atm=detect_atm(state["spot"],main_df)
+            if atm and atm!=state["atm"]:
+                state["atm"]=atm
+                print(f"\n  [{ts()}] ATM:{atm}  Spot:{state['spot']}")
+
+            vix=state["vix"]; spot=state["spot"]; strike=state["atm"]
+            if not strike: time.sleep(REFRESH); continue
+
+            # ── REGIME DETECTION every cycle ────────────────────────
+            regime_full = None
+            if _regime_available and _regime_engine:
+                regime_full = _regime_engine.detect(
+                    main_df, vix, state["spot"], state["near_exp"], strike)
+
+            # Print regime report on change
+            if regime_full and _regime_engine.changed():
+                print_regime_report(regime_full)
+                _regime_engine.mark_printed()
+                if regime_full["key"] == "R8_EXTREME_PANIC":
+                    print(f"\n  [{ts()}] 💀 EXTREME PANIC — All new signals suppressed.")
+                elif regime_full["key"] == "R1_DEAD":
+                    print(f"\n  [{ts()}] 🔴 DEAD MARKET — Calendar spread edge is NEGATIVE. "
+                          f"Showing safe alternatives only.")
+
+            # Also run simple regime for display (backward compat)
+            regime = detect_regime(vix, state["near_exp"])
+
+            now=time.time()
+            if (now-last_analysis)>=ANALYSIS_EVERY:
+                all_opps=run_all(main_df,far_pe_df,strike,vix,spot,state["near_exp"])
+
+                # Apply deep regime filter
+                if regime_full and _regime_available:
+                    all_opps = filter_by_regime(all_opps, regime_full)
+                    mult = regime_full.get("size_mult", 1.0)
+                    if mult < 1.0:
+                        print(f"\n  [{ts()}] ⚠  SIZE OVERRIDE: {mult*100:.0f}% "
+                              f"({regime_full['name']})")
+
+                print_analysis(all_opps, regime, vix)
+                last_analysis=now
+
+                unblocked = [o for o in all_opps if not o.get("regime_blocked", False)]
+                if unblocked:
+                    top=unblocked[0]
+                    ak=f"{top['strategy']}_{top.get('near_strike',top.get('strike',''))}"
+                    mult = regime_full.get("size_mult",1.0) if regime_full else 1.0
+                    if top["score"]>=IMMEDIATE_SCORE and ak not in state["alerted"]:
+                        if mult == 0.0:
+                            print(f"  [{ts()}] 💀 Signal suppressed — regime blocks all entries")
+                        else:
+                            regime_key_for_alert = regime_full.get("key") if regime_full else None
+                            print_alert(top, vix, regime_key_for_alert)
+                        state["alerted"].add(ak)
+
+            # Live tick
+            row=main_df[main_df["near_strike"]==strike]
+            if not row.empty:
+                try:
+                    ce_sp=round(float(row["far_prem"].iloc[0])-float(row["near_ask"].iloc[0]),2)
+                    st=float(row["straddle"].iloc[0])
+                    realised,open_c,_=logger.get_daily_pnl()
+                    regime_line = regime_summary_line(regime_full) if regime_full and _regime_available else risk_icon(vix)
+                    print(f"  [{ts()}]  ATM:{strike}  CE:{ce_sp:+.2f}  "
+                          f"Straddle:{st:.2f}  VIX:{vix}  "
+                          f"P&L:₹{realised:+,.0f}  {regime_line}")
+                except: pass
+
+            if cycle%10==0:
+                if _sizer_available and _sizer:
+                    _sizer.show_status()
+                else:
+                    realised,open_c,_=logger.get_daily_pnl()
+                    print(f"  [{ts()}]  P&L:₹{realised:+,.0f}  Open:{open_c}")
+
+            time.sleep(REFRESH)
+
+        except KeyboardInterrupt:
+            print(f"\n\n  [{ts()}] Paused — what would you like to do?")
+            print("    [1] Log a trade entry")
+            print("    [2] Close a trade / log exit")
+            print("    [3] Update available margin")
+            print("    [4] Show today's P&L summary")
+            print("    [5] Resume algo")
+            try:
+                choice = input("  Choice: ").strip()
+            except EOFError:
+                choice = "5"
+            if choice == "1":
+                logger.interactive_input("Enter Trade")
+            elif choice == "2":
+                logger.interactive_input("Close Trade")
+            elif choice == "3" and _sizer_available and _sizer:
+                _sizer.update_margin()
+            elif choice == "4":
+                logger.print_daily_summary()
+                if _sizer_available and _sizer:
+                    _sizer.show_status()
+            print(f"\n  [{ts()}] Resuming...\n")
+        except Exception as e:
+            print(f"  [{ts()}] Error: {e}"); time.sleep(REFRESH)

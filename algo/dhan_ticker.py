@@ -84,12 +84,49 @@ def get_tick_store() -> TickStore:
     return _tick_store
 
 
+# ── Dhan security IDs for NSE indices (exchange = IDX_I) ──────
+# These give real-time index prices via WebSocket — no REST call needed
+INDEX_TOKENS = {
+    13:  "NIFTY",        # NIFTY 50
+    25:  "BANKNIFTY",    # NIFTY BANK
+    27:  "FINNIFTY",     # NIFTY FIN SERVICE
+    12:  "VIX",          # INDIA VIX
+}
+
+def get_index_prices() -> dict:
+    """
+    Return live index prices from the Dhan tick store.
+    Format: {name: {label, ltp, change_pct, change, _src}}
+    Called by main.py _fetch_live_indices() as the primary source.
+    """
+    result = {}
+    for token, name in INDEX_TOKENS.items():
+        tick = _tick_store.get(token)
+        ltp  = tick.get("last_price") or tick.get("ltp") or 0
+        if ltp:
+            prev  = tick.get("prev_close") or tick.get("close") or ltp
+            ch    = round(float(ltp) - float(prev), 2)
+            chp   = round((ch / float(prev) * 100) if prev else 0, 2)
+            result[name] = {
+                "label":      name,
+                "ltp":        round(float(ltp), 2),
+                "change_pct": chp,
+                "change":     ch,
+                "high":       float(tick.get("high", ltp) or ltp),
+                "low":        float(tick.get("low",  ltp) or ltp),
+                "_ts":        int(time.time()),
+                "_src":       "dhan_ws",
+            }
+    return result
+
+
 def start_dhan_ticker(instrument_tokens: list[int]) -> bool:
     """
     Start Dhan WebSocket ticker in a background daemon thread.
+    Automatically includes NSE index tokens (NIFTY, BANKNIFTY, FINNIFTY, VIX).
 
     Args:
-        instrument_tokens: list of Dhan security_id integers
+        instrument_tokens: additional Dhan security_id integers (F&O tokens)
 
     Returns:
         True if started, False if credentials missing or dhanhq not installed.
@@ -118,10 +155,21 @@ def start_dhan_ticker(instrument_tokens: list[int]) -> bool:
 
             dhan_context = DhanContext(client_id, access_token)
 
-            subscriptions = [
+            # F&O tokens (BANKNIFTY futures/options)
+            fno_subs = [
                 (MarketFeed.NSE_FNO, str(token), MarketFeed.Full)
                 for token in instrument_tokens
             ]
+
+            # Index tokens for NIFTY/BANKNIFTY/FINNIFTY/VIX real-time prices
+            idx_subs = []
+            for t in INDEX_TOKENS.keys():
+                try:
+                    idx_subs.append((MarketFeed.IDX_I, str(t), MarketFeed.Full))
+                except AttributeError:
+                    pass  # IDX_I not in this version of dhanhq — indices via NSE fallback
+
+            subscriptions = fno_subs + idx_subs
 
             def _on_ticks(data):
                 try:
@@ -137,7 +185,7 @@ def start_dhan_ticker(instrument_tokens: list[int]) -> bool:
                 on_ticks=_on_ticks,
             )
             _ticker_running = True
-            print(f"[DhanTicker] Connected — subscribed to {len(subscriptions)} instruments")
+            print(f"[DhanTicker] Connected — {len(fno_subs)} F&O + {len(idx_subs)} index instruments")
             feed.run_forever()
         except Exception as e:
             print(f"[DhanTicker] Error: {e}")
@@ -152,15 +200,15 @@ def is_running() -> bool:
     return _ticker_running
 
 
-# ── Quick test ────────────────────────────────────────────────
 if __name__ == "__main__":
     print("[TEST] DhanTicker (requires DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN)")
     store = get_tick_store()
-    started = start_dhan_ticker([260105])  # BANKNIFTY spot
+    started = start_dhan_ticker([260105])
     if started:
-        print("  Ticker started. Waiting 5s for ticks...")
-        time.sleep(5)
-        tick = store.get(260105)
-        print(f"  BANKNIFTY tick: {tick}")
+        import time as _time
+        print("  Ticker started. Waiting 5s...")
+        _time.sleep(5)
+        prices = get_index_prices()
+        print(f"  Index prices: {prices}")
     else:
         print("  Skipped — set DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN to test")
