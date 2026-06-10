@@ -22,7 +22,7 @@ echo  [GIT] Staging all changes...
 git add . 2>&1
 
 echo  [GIT] Committing...
-git commit -m "feat: add dhan_market_feed.py free option chain via LTP API; fix dhan_data fallback chain; update data_provider Dhan-first routing" 2>&1
+git commit -m "fix: signal_loop crash on empty signals (IndexError at cycle 30), add supervised auto-restart for engine loops, fix NameError in Yahoo indices fallback, make DEMO_MODE functional" 2>&1
 
 IF ERRORLEVEL 1 (
     echo  [GIT] Nothing to commit or commit failed — continuing
@@ -40,6 +40,17 @@ IF ERRORLEVEL 1 (
 echo.
 echo  Starting AlgoTrade...
 echo.
+
+REM ── Kill stale backend (port 8000) and frontend (port 5173) ───
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000 " ^| findstr "LISTENING"') do (
+    echo  [CLEANUP] Killing stale backend PID %%a
+    taskkill /F /PID %%a >nul 2>&1
+)
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":5173 " ^| findstr "LISTENING"') do (
+    echo  [CLEANUP] Killing stale frontend PID %%a
+    taskkill /F /PID %%a >nul 2>&1
+)
+timeout /t 2 /nobreak >nul
 
 SET "PATH=%PATH%;C:\Program Files\nodejs;C:\Program Files (x86)\nodejs"
 SET "PATH=%PATH%;%APPDATA%\npm;%APPDATA%\nvm\current"

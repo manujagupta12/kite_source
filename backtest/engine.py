@@ -271,10 +271,18 @@ class BacktestEngine:
             if near_val is None:
                 return None
 
+<<<<<<< HEAD
         # Far leg — must have data, no fallback (was corrupting P&L when missing)
         far_val = get_settle(far_dt)
         if far_val is None:
             return None   # v4 fix: return None instead of near_val to avoid P&L corruption
+=======
+        # Far leg
+        far_val = get_settle(far_dt)
+        if far_val is None:
+            # Try to get far leg from closest available expiry
+            return near_val   # fallback: treat as only tracking near
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
 
         return near_val - far_val   # net spread value (decreases as near decays → profit for seller)
 

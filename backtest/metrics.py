@@ -133,10 +133,15 @@ def compute_metrics(trades: List[TradeResult], strategy_name: str, lot_value: fl
     if len(df) >= 2:
         days_total = (df["date_out"].max() - df["date_in"].min()).days or 1
         ann_return = (pnls.sum() / days_total) * 252
+<<<<<<< HEAD
         # v4 fix: clamp ann_return first, THEN divide — prevents overflow before clip
         ann_return_clamped = float(np.clip(ann_return, -1e9, 1e9))
         dd_denom   = max(abs(max_drawdown) / 100, 0.01)   # min 1% denominator (was 0.1%)
         calmar     = float(np.clip(ann_return_clamped / dd_denom, -999, 9999))
+=======
+        dd_denom   = max(max_drawdown / 100, 0.001)   # min 0.1% denominator
+        calmar     = float(np.clip(ann_return / dd_denom, -999, 9999))
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
     else:
         calmar = 0.0
 

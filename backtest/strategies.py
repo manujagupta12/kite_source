@@ -172,6 +172,7 @@ def _nearest_expiry_after(expiries, dt, min_days: int = 1):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+<<<<<<< HEAD
 # 1. PCR Mean-Reversion  v5  — reversal confirmation + tighter thresholds
 # ═══════════════════════════════════════════════════════════════════════════════
 class PCRMeanReversion:
@@ -205,6 +206,39 @@ class PCRMeanReversion:
     PCR_SMOOTH      = 5
     MIN_SCORE       = 68       # raised from 65 — stricter quality gate
     REVERSAL_WINDOW = 2        # PCR must have been extreme for ≥2 days before reversing
+=======
+# 1. PCR Mean-Reversion  v3  (regime-filtered, spot-ATM, DTE guard, per-instrument bands)
+# ═══════════════════════════════════════════════════════════════════════════════
+class PCRMeanReversion:
+    """
+    v3 changes vs v2:
+      1. ATM from SPOT (weighted settle avg) not max-OI strike
+         — max-OI strike can be 500pts away from spot → wrong option priced
+      2. Per-instrument PCR bands
+         — BANKNIFTY naturally trades at 0.6-1.0; v2's 0.80/1.25 barely triggered
+      3. DTE filter: 6 ≤ DTE ≤ 28
+         — v2 entered with 1-2 DTE → theta wiped out premium before target hit
+      4. 3-day smoothed PCR (reduce noise from single-day data spikes)
+      5. Trend filter: EMA20 direction
+         — Don't buy calls in downtrend, don't buy puts in uptrend
+      6. OTM by 1 step (better R:R vs deep OTM)
+      7. Score includes DTE penalty (lower DTE = lower score)
+    """
+    name = "PCR_MeanReversion"
+
+    # Per-instrument thresholds (BANKNIFTY has structurally lower PCR)
+    THRESHOLDS = {
+        "NIFTY":     (0.78, 1.28),   # (sell_threshold, buy_threshold)
+        "BANKNIFTY": (0.62, 1.05),
+        "FINNIFTY":  (0.70, 1.18),
+    }
+    MIN_PREMIUM  = 40.0
+    TARGET_MULT  = 1.65   # 65% gain target
+    STOP_MULT    = 0.68   # 32% loss stop  → R:R = 1.65/0.32 ≈ 2.1:1
+    MIN_DTE      = 6
+    MAX_DTE      = 28
+    PCR_SMOOTH   = 3      # days to smooth PCR
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
 
     def generate(self, df: pd.DataFrame) -> list[Signal]:
         signals = []
@@ -214,6 +248,7 @@ class PCRMeanReversion:
         df["STRIKE_PR"] = pd.to_numeric(df["STRIKE_PR"], errors="coerce")
         df["SETTLE_PR"] = pd.to_numeric(df["SETTLE_PR"], errors="coerce")
         df["OPEN_INT"]  = pd.to_numeric(df["OPEN_INT"],  errors="coerce")
+<<<<<<< HEAD
         for c in ["HIGH", "LOW"]:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -224,10 +259,47 @@ class PCRMeanReversion:
             sym_df = df[df["SYMBOL"].str.strip().str.upper() == symbol]
             if sym_df.empty:
                 continue
+=======
+
+        for symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY"]:
+            sell_thr, buy_thr = self.THRESHOLDS.get(symbol, (0.78, 1.28))
+            step = STRIKE_STEP.get(symbol, 50)
+            sym_df = df[df["SYMBOL"].str.strip().str.upper() == symbol]
+            if sym_df.empty:
+                continue
+
+            # Build daily PCR time series (all expiries combined for stability)
+            daily_pcr = {}
+            for dt, day in sym_df.groupby("DATE"):
+                pe_oi = day[day["OPTION_TYP"].str.upper() == "PE"]["OPEN_INT"].sum()
+                ce_oi = day[day["OPTION_TYP"].str.upper() == "CE"]["OPEN_INT"].sum()
+                if ce_oi > 0:
+                    daily_pcr[pd.Timestamp(dt)] = pe_oi / ce_oi
+
+            if len(daily_pcr) < self.PCR_SMOOTH + 1:
+                continue
+
+            pcr_series = pd.Series(daily_pcr).sort_index()
+            pcr_smooth = pcr_series.rolling(self.PCR_SMOOTH, min_periods=1).mean()
+
+            # Build EMA20 on ATM close price for trend filter
+            atm_closes = {}
+            for dt, day in sym_df.groupby("DATE"):
+                settle = day["SETTLE_PR"].dropna()
+                if not settle.empty:
+                    atm_closes[pd.Timestamp(dt)] = float(settle.mean())
+            if len(atm_closes) < 22:
+                continue
+            close_series = pd.Series(atm_closes).sort_index()
+            ema20 = close_series.ewm(span=20, adjust=False).mean()
+
+            seen_dates = set()
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
 
             # ── Daily PCR (smoothed) ──────────────────────────────────────────
             daily_pcr = {}
             for dt, day in sym_df.groupby("DATE"):
+<<<<<<< HEAD
                 pe_oi = day[day["OPTION_TYP"].str.upper() == "PE"]["OPEN_INT"].sum()
                 ce_oi = day[day["OPTION_TYP"].str.upper() == "CE"]["OPEN_INT"].sum()
                 if ce_oi > 0:
@@ -309,10 +381,76 @@ class PCRMeanReversion:
                     continue
 
                 entry_val = pd.to_numeric(opt_rows["SETTLE_PR"], errors="coerce").dropna()
+=======
+                dt_ts = pd.Timestamp(dt)
+                if dt_ts in seen_dates:
+                    continue
+
+                # Smoothed PCR
+                pcr = float(pcr_smooth.get(dt_ts, 0))
+                if pcr == 0:
+                    continue
+
+                # Trend direction from EMA20
+                ema_now  = ema20.get(dt_ts, None)
+                ema_prev = ema20.shift(1).get(dt_ts, None) if dt_ts in ema20.index else None
+                trending_up   = (ema_now is not None and ema_prev is not None and ema_now > ema_prev)
+                trending_down = (ema_now is not None and ema_prev is not None and ema_now < ema_prev)
+
+                # Signal direction with trend filter
+                if pcr > buy_thr and not trending_down:
+                    opt_type = "CE"
+                    score_base = min(85, 58 + int((pcr - buy_thr) * 50))
+                elif pcr < sell_thr and not trending_up:
+                    opt_type = "PE"
+                    score_base = min(85, 58 + int((sell_thr - pcr) * 80))
+                else:
+                    continue
+
+                # Find expiry within DTE window
+                exps = sorted([e for e in day["EXPIRY_DT"].dropna().unique()
+                                if self.MIN_DTE <= (e - dt_ts).days <= self.MAX_DTE])
+                if not exps:
+                    continue
+                target_exp = exps[0]   # nearest valid expiry
+                dte = (target_exp - dt_ts).days
+                near_df = day[day["EXPIRY_DT"] == target_exp]
+
+                # Spot-based ATM: use weighted average settle as spot proxy
+                settle_vals = near_df["SETTLE_PR"].dropna()
+                strike_vals = near_df["STRIKE_PR"].dropna()
+                if settle_vals.empty or strike_vals.empty:
+                    continue
+                spot_proxy = float(near_df["STRIKE_PR"].dropna().median())
+
+                # Find ATM strike = nearest available strike to spot
+                available_strikes = near_df["STRIKE_PR"].dropna().unique()
+                if len(available_strikes) == 0:
+                    continue
+                atm = float(min(available_strikes, key=lambda k: abs(k - spot_proxy)))
+
+                # Select 1-step OTM for better premium profile
+                if opt_type == "CE":
+                    target_strike = atm + step
+                else:
+                    target_strike = atm - step
+
+                # Fallback to ATM if OTM not available
+                rows = near_df[(near_df["OPTION_TYP"].str.upper() == opt_type) &
+                               (near_df["STRIKE_PR"] == target_strike)]
+                if rows.empty:
+                    rows = near_df[(near_df["OPTION_TYP"].str.upper() == opt_type) &
+                                   (near_df["STRIKE_PR"] == atm)]
+                if rows.empty:
+                    continue
+
+                entry_val = pd.to_numeric(rows["SETTLE_PR"], errors="coerce").dropna()
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
                 if entry_val.empty:
                     continue
                 entry = float(entry_val.iloc[0])
                 if entry < self.MIN_PREMIUM:
+<<<<<<< HEAD
                     continue
 
                 dte_bonus = 4 if 10 <= dte <= 18 else (-3 if dte < 9 else 0)
@@ -324,6 +462,19 @@ class PCRMeanReversion:
                     date         = dt_ts,
                     strategy     = self.name,
                     symbol       = f"{symbol} {int(target_strike)} {opt_type}",
+=======
+                    continue
+
+                # DTE score penalty: reward mid-expiry entries
+                dte_bonus = 5 if 10 <= dte <= 20 else (-3 if dte < 8 else 0)
+                score = max(55, min(92, score_base + dte_bonus))
+
+                used_strike = int(target_strike if not rows.empty else atm)
+                signals.append(Signal(
+                    date         = dt_ts,
+                    strategy     = self.name,
+                    symbol       = f"{symbol} {used_strike} {opt_type}",
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
                     instrument   = symbol,
                     direction    = "BUY",
                     entry_price  = round(entry, 2),
@@ -331,8 +482,12 @@ class PCRMeanReversion:
                     stop_loss    = round(entry * self.STOP_MULT, 2),
                     score        = score,
                     lot_size     = LOT_SIZES.get(symbol, 50),
+<<<<<<< HEAD
                     notes        = (f"PCR={pcr_now:.3f} prev={pcr_prev:.3f} REVERSAL "
                                     f"DTE={dte} ADX={adx_val:.1f} {opt_type} K={int(target_strike)}"),
+=======
+                    notes        = f"PCR_smooth={pcr:.3f}(raw={pcr_series.get(dt_ts,0):.3f}) DTE={dte} {opt_type} strike={used_strike}",
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
                 ))
                 seen_dates.add(dt_ts)
 
@@ -775,6 +930,7 @@ class OIBuildup:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+<<<<<<< HEAD
 # 6. Calendar Spread  v5  — tighter ADX gate + Mon/Tue only + higher min credit
 # ═══════════════════════════════════════════════════════════════════════════════
 class CalendarSpread:
@@ -807,6 +963,48 @@ class CalendarSpread:
     STOP_MULT    = 1.70         # tightened from 1.80
     ADX_MAX      = 20           # tightened from 28 — only flat markets
     ENTRY_DAYS   = {0, 1}       # Mon/Tue only (new in v5)
+=======
+# 6. Calendar Spread  v3  (fixed engine tracking, correct P&L, proper stops)
+# ═══════════════════════════════════════════════════════════════════════════════
+class CalendarSpread:
+    """
+    v3 critical fixes:
+
+    ENGINE BUG FIXED (was causing catastrophic losses):
+      v2 bug: entry_price = net_credit (e.g. ₹20), but engine's _price()
+              returned just the near leg price (e.g. ₹150).
+              Stop check: 150 >= 20 × 1.5 = 30 → STOP triggered on DAY 1.
+              Far leg P&L was NEVER tracked (huge omission).
+
+      v3 fix: Symbol format changed to "NIFTY CAL {strike} {opt_t} {near_ts} {far_ts}"
+              New _price_calendar() in engine looks up BOTH legs and returns:
+              current_net = near_current - far_current
+              Stop/target based on % change in current_net, not raw price.
+              P&L = (near_entry - near_exit) - (far_exit - far_entry) correctly.
+
+    STRATEGY LOGIC FIXES:
+      1. ATM from median strike (spot proxy), not max-OI
+      2. Near DTE: 3-10 days (weekly expiry sweet spot for theta)
+      3. Far DTE: 20-45 days (enough time value in far leg)
+      4. Skew check: near_price > far_price by ≥ 5% (contango confirmed)
+      5. Min near premium: ₹80 (enough credit to cover costs)
+      6. Exit target: current_net drops to 25% of entry_net (75% decay = profit)
+      7. Exit stop: current_net exceeds 200% of entry_net (market moved too far)
+      8. FINNIFTY excluded: insufficient liquidity in far-month options
+
+    Expected: 60-80 trades/yr, 55-65% WR, PF 1.8-2.5
+    """
+    name        = "Calendar_Spread"
+    MIN_SKEW    = 0.05        # near must be ≥ 5% more than far
+    MIN_NEAR_PR = 80          # near option floor (ensures meaningful credit)
+    MIN_FAR_PR  = 30          # far option floor (ensures hedge value)
+    NEAR_DTE_MIN = 3
+    NEAR_DTE_MAX = 10
+    FAR_DTE_MIN  = 20
+    FAR_DTE_MAX  = 45
+    TARGET_DECAY = 0.25       # exit when current_net falls to 25% of entry_net (profit)
+    STOP_MULT    = 2.00       # exit when current_net rises to 200% of entry_net (loss)
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
 
     def generate(self, df: pd.DataFrame) -> list[Signal]:
         signals = []
@@ -829,12 +1027,19 @@ class CalendarSpread:
                            all(c in idx_ohlc.columns for c in ["HIGH","LOW","CLOSE"])
                         else pd.Series(dtype=float))
 
+<<<<<<< HEAD
+=======
+        for symbol in ["NIFTY", "BANKNIFTY"]:   # FINNIFTY excluded: far-month illiquid
+            step   = STRIKE_STEP.get(symbol, 50)
+            sym_df = df[df["SYMBOL"].str.strip().str.upper() == symbol]
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
             seen_dates = set()
 
             for dt, day in sym_df.groupby("DATE"):
                 if dt in seen_dates:
                     continue
                 dt_ts = pd.Timestamp(dt)
+<<<<<<< HEAD
 
                 # Mon/Tue only (v5)
                 if dt_ts.weekday() not in self.ENTRY_DAYS:
@@ -852,22 +1057,50 @@ class CalendarSpread:
                     if self.NEAR_DTE_MIN <= dte <= self.NEAR_DTE_MAX and not near_exp:
                         near_exp = e
                     elif self.FAR_DTE_MIN <= dte <= self.FAR_DTE_MAX and not far_exp:
+=======
+                exps  = sorted(day["EXPIRY_DT"].dropna().unique())
+
+                # Find near and far expiry in correct DTE windows
+                near_exp = None
+                far_exp  = None
+                for e in exps:
+                    dte = (e - dt_ts).days
+                    if self.NEAR_DTE_MIN <= dte <= self.NEAR_DTE_MAX and near_exp is None:
+                        near_exp = e
+                    elif self.FAR_DTE_MIN <= dte <= self.FAR_DTE_MAX and far_exp is None:
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
                         far_exp = e
                     if near_exp and far_exp:
                         break
 
+<<<<<<< HEAD
                 if not near_exp or not far_exp:
+=======
+                if near_exp is None or far_exp is None:
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
                     continue
 
                 near_df = day[day["EXPIRY_DT"] == near_exp]
                 far_df  = day[day["EXPIRY_DT"] == far_exp]
 
+<<<<<<< HEAD
                 oi_by_strike = day.groupby("STRIKE_PR")["OPEN_INT"].sum()
                 if oi_by_strike.empty:
                     continue
                 spot_proxy = float(oi_by_strike.idxmax())
                 all_strikes = day["STRIKE_PR"].dropna().unique()
                 atm = float(min(all_strikes, key=lambda k: abs(k - spot_proxy)))
+=======
+                # ATM from median strike (spot proxy)
+                all_strikes = day["STRIKE_PR"].dropna().unique()
+                if len(all_strikes) == 0:
+                    continue
+                spot_proxy = float(np.median(all_strikes))
+                atm = float(min(all_strikes, key=lambda k: abs(k - spot_proxy)))
+
+                near_dte = (near_exp - dt_ts).days
+                far_dte  = (far_exp  - dt_ts).days
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
 
                 near_dte = (near_exp - dt_ts).days
                 far_dte  = (far_exp  - dt_ts).days
@@ -879,6 +1112,7 @@ class CalendarSpread:
                 if nr.empty or fr.empty:
                     continue
 
+<<<<<<< HEAD
                 np_s = nr["SETTLE_PR"].dropna()
                 fp_s = fr["SETTLE_PR"].dropna()
                 if np_s.empty or fp_s.empty:
@@ -931,6 +1165,54 @@ class CalendarSpread:
                                     f"Net={net_credit:.0f} ADX={adx_val:.1f}"),
                 ))
                 seen_dates.add(dt_ts)
+=======
+                    np_ = float(np_s.iloc[0])
+                    fp_ = float(fp_s.iloc[0])
+
+                    if np_ < self.MIN_NEAR_PR or fp_ < self.MIN_FAR_PR:
+                        continue
+                    if fp_ <= 0:
+                        continue
+
+                    skew = (np_ - fp_) / fp_
+                    if skew < self.MIN_SKEW:
+                        continue
+
+                    # entry_price = net credit (near sold - far bought)
+                    net_credit = round(np_ - fp_, 2)
+                    if net_credit <= 5:
+                        continue
+
+                    # target = current_net decays to 25% of entry (we keep 75%)
+                    # stop   = current_net rises to 200% (position doubled against us)
+                    target_price = round(net_credit * self.TARGET_DECAY, 2)
+                    stop_price   = round(net_credit * self.STOP_MULT, 2)
+
+                    near_ts = near_exp.strftime("%Y%m%d")
+                    far_ts  = far_exp.strftime("%Y%m%d")
+                    score   = min(84, 50 + int(skew * 100) + max(0, 8 - near_dte))
+
+                    signals.append(Signal(
+                        date        = dt_ts,
+                        strategy    = self.name,
+                        # CAL symbol format so engine knows to look up both legs
+                        symbol      = f"{symbol} CAL {int(atm)} {opt_t} {near_ts} {far_ts}",
+                        instrument  = symbol,
+                        direction   = "SELL",
+                        entry_price = net_credit,
+                        target_price= target_price,
+                        stop_price  = stop_price,    # stop when net rises (seller's loss)
+                        stop_loss   = stop_price,
+                        score       = score,
+                        lot_size    = LOT_SIZES.get(symbol, 50),
+                        expiry      = near_exp,      # close at near expiry at latest
+                        max_loss_ratio = self.STOP_MULT,
+                        n_legs      = 2,
+                        notes       = f"Near={np_:.0f}(DTE={near_dte}) Far={fp_:.0f}(DTE={far_dte}) Skew={skew:.2%} Net={net_credit:.0f}",
+                    ))
+                    seen_dates.add(dt_ts)
+                    break  # one signal per symbol per day
+>>>>>>> d0f6ddf82737d1437f0f8d3ef637917c8bb8c620
 
         return signals
 

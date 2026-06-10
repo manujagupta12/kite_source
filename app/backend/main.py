@@ -970,7 +970,7 @@ def _fetch_yahoo_indices() -> dict:
     for label, ticker in _YF.items():
         try:
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d"
-            r   = requests.get(url, headers=hdr, timeout=6)
+            r   = _req.get(url, headers=hdr, timeout=6)
             if r.status_code != 200:
                 continue
             meta  = r.json()["chart"]["result"][0]["meta"]
@@ -1203,6 +1203,13 @@ async def signal_loop():
                         logging.info(f"[MCX] {len(valid_mcx)} commodity signal(s) generated (pre-market)")
                 except Exception as _me:
                     logging.debug(f"[MCX] pre-market run error: {_me}")
+            # DEMO_MODE works after hours too — inject a mock signal every 5 min
+            if _DEMO_MODE and cycle % 5 == 0:
+                demo_sig = _mock_fo_signal()
+                demo_sig["demo"] = True
+                _db["signals"].append(demo_sig)
+                _db["signals"] = _db["signals"][-300:]
+                await broadcaster.broadcast({"type": "signal", "data": demo_sig})
             continue
 
         # ── Sync _NSE_OK with actual data availability (NSE or Dhan fallback) ──
@@ -1308,7 +1315,19 @@ async def signal_loop():
                 _tg_send(ps)
             if valid_pcr:
                 _db["signals"] = _db["signals"][-300:]
-        if cycle % 30 == 0:
+
+        # ── DEMO_MODE: inject mock signals every 15s so the full pipeline
+        #    (WS broadcast → dashboard cards) can be tested without live data.
+        #    Mock signals intentionally bypass _validate_signal (it rejects
+        #    'mock' sources by design) and are tagged demo=True.
+        if _DEMO_MODE and cycle % 5 == 0:
+            for demo_sig in (_mock_fo_signal(), _mock_pcr_signal()):
+                demo_sig["demo"] = True
+                _db["signals"].append(demo_sig)
+                await broadcaster.broadcast({"type": "signal", "data": demo_sig})
+            _db["signals"] = _db["signals"][-300:]
+
+        if cycle % 30 == 0 and _db["signals"]:   # FIXED: guard — empty list crashed the loop with IndexError
             last = _db["signals"][-1]
             await broadcaster.broadcast({"type": "regime", "regime": last.get("regime", "UNKNOWN"), "vix": last.get("vix"), "risk": last.get("risk", "MEDIUM"), "timestamp": last.get("timestamp"), "source": last.get("source", "mock")})
         if cycle % 12 == 0:
@@ -1327,6 +1346,21 @@ async def signal_loop():
         if cycle % 10 == 0 and _db["signals"]:
             _persist_signals()
 
+async def _supervised(coro_fn, name: str):
+    """
+    Run a background loop forever — if it crashes, log the full traceback and
+    restart after 5s. Prevents silent task death (asyncio swallows exceptions
+    in fire-and-forget tasks, which previously killed the signal engine).
+    """
+    while True:
+        try:
+            await coro_fn()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception(f"[{name}] CRASHED — restarting in 5s")
+            await asyncio.sleep(5)
+
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     if "demo@algotrade.in" not in _db["users"]:
@@ -1340,8 +1374,8 @@ async def lifespan(app:FastAPI):
         # BANKNIFTY spot + near/far CE/PE tokens (standard Dhan security_ids)
         start_dhan_ticker([260105, 260106])
         logging.info("[Dhan] WebSocket ticker started")
-    t1 = asyncio.create_task(indices_loop())
-    t2 = asyncio.create_task(signal_loop())
+    t1 = asyncio.create_task(_supervised(indices_loop, "IndicesLoop"))
+    t2 = asyncio.create_task(_supervised(signal_loop,  "SignalLoop"))
     yield
     t1.cancel(); t2.cancel()
 
