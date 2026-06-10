@@ -57,7 +57,7 @@ FAR_EXPIRY_IDX      = 1
 # Cache of last fetched chain to avoid hammering NSE on every call
 _chain_cache: dict = {}
 _chain_cache_ts: float = 0
-_CACHE_TTL_SEC: float  = 2.0   # Refresh every 2s max
+_CACHE_TTL_SEC: float  = 15.0  # Refresh every 15s max — gentle on NSE anti-bot
 
 # Shared instances
 _fetcher: NSEFetcher   = None

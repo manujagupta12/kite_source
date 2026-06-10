@@ -27,23 +27,14 @@ _OC_INDEX    = "/api/option-chain-indices?symbol={sym}"
 _OC_EQUITY   = "/api/option-chain-equities?symbol={sym}"
 _ALL_INDICES  = "/api/allIndices"
 
+# Minimal header set — verified working against NSE v3 API (Jun 2026).
+# NOTE: do NOT add Origin / sec-ch-ua / Sec-Fetch-* / X-Requested-With here;
+# NSE's anti-bot rejects sessions with fingerprint mismatch (403/empty).
 _HEADERS = {
     "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept":          "application/json, text/plain, */*",
-    "Accept-Language": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Language": "en-IN,en;q=0.9",
     "Referer":         "https://www.nseindia.com/option-chain",
-    "Origin":          "https://www.nseindia.com",
-    "Connection":      "keep-alive",
-    "Cache-Control":   "no-cache",
-    "Pragma":          "no-cache",
-    "sec-ch-ua":       '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "Sec-Fetch-Dest":  "empty",
-    "Sec-Fetch-Mode":  "cors",
-    "Sec-Fetch-Site":  "same-origin",
-    "X-Requested-With": "XMLHttpRequest",
 }
 
 # Index symbols use the indices endpoint; everything else uses equities
@@ -72,6 +63,10 @@ class NSEFetcher:
         self._refresh_interval = session_refresh_interval
         self._fail_count: int = 0          # consecutive failures
         self._backoff_until: float = 0     # epoch time to stop backing off
+        # Raw response cache — one NSE hit serves expiries + near + far chain.
+        # Without this, every signal cycle hits NSE 3x → instant anti-bot block.
+        self._raw_cache: dict = {}         # sym -> (epoch, data)
+        self._raw_cache_ttl: float = 20.0  # seconds
         self._init_session()
 
     # ── Session management ────────────────────────────────────
@@ -332,9 +327,71 @@ class NSEFetcher:
 
     # ── Internal ──────────────────────────────────────────────
 
+    def _fetch_v3(self, sym: str) -> Optional[dict]:
+        """
+        NSE option-chain v3 API (the old /api/option-chain-indices was retired by
+        NSE — returns 404 as of mid-2026). Fetches near+far expiry and converts
+        rows to the legacy format so the rest of the pipeline is untouched.
+
+        Endpoints:
+          /api/option-chain-contract-info?symbol=SYM      -> {"expiryDates":[...]}
+          /api/option-chain-v3?type=Indices&symbol=SYM&expiry=DD-MMM-YYYY
+        """
+        typ = "Indices" if sym in _INDEX_SYMBOLS else "Equity"
+        r = self._session.get(
+            _BASE + f"/api/option-chain-contract-info?symbol={sym}", timeout=10)
+        r.raise_for_status()
+        expiries = r.json().get("expiryDates") or []
+        if not expiries:
+            return None
+
+        data_rows, spot, ts = [], 0.0, ""
+        for exp in expiries[:2]:                      # near + far is all we use
+            r2 = self._session.get(
+                _BASE + f"/api/option-chain-v3?type={typ}&symbol={sym}&expiry={exp}",
+                timeout=10)
+            r2.raise_for_status()
+            rec = (r2.json() or {}).get("records") or {}
+            spot = float(rec.get("underlyingValue") or spot or 0)
+            ts   = rec.get("timestamp") or ts
+            for row in rec.get("data") or []:
+                legacy = {"expiryDate": exp}
+                strike = 0
+                for side in ("CE", "PE"):
+                    s_ = row.get(side)
+                    if not s_:
+                        continue
+                    strike = s_.get("strikePrice", strike)
+                    legacy[side] = {
+                        "strikePrice":          s_.get("strikePrice", 0),
+                        "lastPrice":            s_.get("lastPrice", 0),
+                        "bidprice":             s_.get("buyPrice1", 0),    # v3: buyPrice1
+                        "askPrice":             s_.get("sellPrice1", 0),   # v3: sellPrice1
+                        "bidQty":               s_.get("buyQuantity1", 0),
+                        "askQty":               s_.get("sellQuantity1", 0),
+                        "openInterest":         s_.get("openInterest", 0),
+                        "changeinOpenInterest": s_.get("changeinOpenInterest", 0),
+                        "totalTradedVolume":    s_.get("totalTradedVolume", 0),
+                        "impliedVolatility":    s_.get("impliedVolatility", 0),
+                    }
+                legacy["strikePrice"] = strike
+                if strike:
+                    data_rows.append(legacy)
+            time.sleep(0.25)                          # be gentle between the 2 calls
+
+        if not data_rows:
+            return None
+        return {"records": {"expiryDates": expiries, "data": data_rows,
+                            "underlyingValue": spot, "timestamp": ts}}
+
     def _fetch_raw(self, symbol: str) -> Optional[dict]:
         """Fetch raw option chain JSON with circuit breaker to prevent 404 spam."""
         sym = symbol.upper()
+
+        # Serve from raw cache — avoids hammering NSE (3 calls/cycle → 1 call/20s)
+        cached = self._raw_cache.get(sym)
+        if cached and time.time() - cached[0] < self._raw_cache_ttl:
+            return cached[1]
 
         # Circuit breaker — back off for 90s after 3 consecutive failures
         if self._fail_count >= 3:
@@ -344,12 +401,25 @@ class NSEFetcher:
                 self._fail_count = 0  # reset after backoff
                 self._init_session()  # fresh cookies on every recovery attempt
 
-        # Primary: nsepython
+        # Primary: NSE v3 API (old endpoint retired — 404; nsepython 0.0.955 also dead)
+        self._ensure_session()
+        try:
+            data = self._fetch_v3(sym)
+            if data and data.get("records", {}).get("data"):
+                self._fail_count = 0
+                self._raw_cache[sym] = (time.time(), data)
+                return data
+        except Exception as e:
+            print(f"[NSEFetcher] v3 fetch failed for {sym}: {e}")
+            self._init_session()   # fresh cookies for the fallback attempt
+
+        # Secondary: nsepython (kept in case it gets updated for v3)
         try:
             from nsepython import nse_optionchain_scrapper
             data = nse_optionchain_scrapper(sym)
-            if data and data.get("records"):
+            if data and data.get("records", {}).get("data"):
                 self._fail_count = 0
+                self._raw_cache[sym] = (time.time(), data)
                 return data
         except Exception as e:
             if "No module" not in str(e):
@@ -364,6 +434,7 @@ class NSEFetcher:
             data = r.json()
             if data.get("records"):
                 self._fail_count = 0
+                self._raw_cache[sym] = (time.time(), data)
                 return data
         except Exception as e:
             pass  # fall through to failure handling

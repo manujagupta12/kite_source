@@ -1238,7 +1238,8 @@ async def signal_loop():
         # ── LIVE MARKET: generate real signals ───────────────────────────
 
         # S1 Calendar Spread — every cycle (3s)
-        fo_sig = _nse_signal()
+        # FIXED: run in executor — blocking HTTP on the event loop froze /signals/* endpoints
+        fo_sig = await asyncio.get_event_loop().run_in_executor(None, _nse_signal)
         if fo_sig and _validate_signal(fo_sig):
             fo_sig["source"]   = "NSE_LIVE"
             fo_sig["is_live"]  = True
@@ -1248,7 +1249,8 @@ async def signal_loop():
 
         # Equity signals — every 30s (10 cycles × 3s)
         if cycle % 10 == 0:
-            eq = generate_equity_signals(top_n=6)
+            # FIXED: executor — 25 sequential HTTP quotes were blocking the event loop ~30s+
+            eq = await asyncio.get_event_loop().run_in_executor(None, lambda: generate_equity_signals(top_n=6))
             valid_eq = [s for s in eq if _validate_signal(s)]
             for s in valid_eq:
                 s["is_live"] = True

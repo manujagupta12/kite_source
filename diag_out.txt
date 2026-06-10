@@ -1,0 +1,9 @@
+Python: 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
+[1] nsepython OC: rows=0 spot=None (2.0s)
+[2] raw OC: warmup=403/200 oc_status=404 len=381 ct=text/html; charset=utf-8
+[2] raw OC body[:200]='<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <title>Resource not found</title>\n</head>\n<body style="background-color: #e8e8e8;">\n  <div style="font-size: 32px; padding: 50px 25px'
+[3] dhan_data.is_available = True
+[3] dhan expiries = []
+[4] dhan_market_feed.is_available = True
+[4] mf expiries = []
+[4] mf chain rows=0 underlying=None

@@ -1,0 +1,15 @@
+GET https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol=BANKNIFTY
+  -> 200 ct=application/json; charset=utf-8 len=2
+  top keys: []
+  body sample: {}
+GET https://www.nseindia.com/api/option-chain-contract-info?symbol=BANKNIFTY
+  -> 200 ct=application/json; charset=utf-8 len=3365
+  top keys: ['expiryDates', 'strikePrice']
+  body sample: {"expiryDates": ["30-Jun-2026", "28-Jul-2026", "25-Aug-2026", "29-Sep-2026", "29-Dec-2026", "30-Mar-2027"], "strikePrice": ["28000", "28500", "29000", "29500", "30000", "30500", "31000", "31500", "32000", "32500", "33000", "33500", "34000", "34500", "35000", "35300", "35400", "35500", "35600", "35700", "35800", "35900", "36000", "36100", "36200", "36300", "36400", "36500", "36600", "36700", "36800", "36900", "37000", "37100", "37200", "37300", "37400", "37500", "37600", "37700", "37800", "37900", "38000", "38100", "38200", "38300", "38400", "38500", "38600", "38700", "38800", "38900", "39000", "39100", "39200", "39300", "39400", "39500", "39600", "39700", "39800", "39900", "40000", "40100", "40200", "40300", "40400", "40500", "40600", "40700", "40800", "40900", "41000", "41100", "41200", "41300", "41400", "41500", "41600", "41700", "41800", "41900", "42000", "42100", "42200", "42300", "4
+GET https://www.nseindia.com/api/option-chain-indices?symbol=BANKNIFTY
+  -> 404 ct=text/html; charset=utf-8 len=381
+contract-info expiries[:5]: ['30-Jun-2026', '28-Jul-2026', '25-Aug-2026', '29-Sep-2026', '29-Dec-2026']
+GET https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol=BANKNIFTY&expiry=30-Jun-2026
+  -> 200 len=407532
+  v3+expiry records keys: ['data', 'timestamp', 'underlyingValue', 'expiryDates', 'strikePrices'] rows=190 spot=55349.1
+  sample row: {"expiryDates": "30-Jun-2026", "CE": {"PChange": 0.5362747189128249, "buyPrice1": 1633.8, "buyQuantity1": 30, "change": 8.8, "changeinOpenInterest": -116, "expiryDate": "30-06-2026", "identifier": "OPTIDXBANKNIFTY30-06-2026CE54300.00", "impliedVolatility": 14.97, "lastPrice": 1649.75, "openInterest": 3371, "optionType": null, "pChange": 0.5362747189128249, "pchangeinOpenInterest": -3.326641812446229, "sellPrice1": 1648.25, "sellQuantity1": 30, "strikePrice": 54300, "totalBuyQuantity": 6390, "totalSellQuantity": 9750, "totalTradedVolume": 300, "underlying": "BANKNIFTY", "underlyingValue": 55349.1}, "PE": {"PChange": -1.9655172413793103, "buyPrice1": 565.85, "buyQuantity1": 60, "change": -11.4, "changeinOpenInterest": -118, "expiryDate": "30-06-2026", "identifier": "OPTIDXBANKNIFTY30-06-2026PE54300.00", "impliedVolatility": 22, "lastPrice": 568.6, "openInterest": 4625, "optionType": null, 
