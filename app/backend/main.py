@@ -1784,7 +1784,21 @@ def _fallback_candles(symbol: str, interval: int, n: int = 60) -> list:
     }
     # Use last known live price as anchor if available
     live = _latest_indices_map.get(symbol, {})
-    base = float(live.get("ltp") or BASES.get(symbol, 1000))
+    base = float(live.get("ltp") or 0)
+    if not base:
+        # FIXED: anchor to the most recent signal's real price for this symbol —
+        # equities/commodities aren't in _latest_indices_map, so the old generic
+        # base drew nonsense charts (e.g. 995 for a 2,180 stock)
+        for s in reversed(_db["signals"]):
+            if str(s.get("symbol") or s.get("instrument") or "").upper() == symbol:
+                cand = s.get("ltp") or s.get("spot") or s.get("close") or s.get("price") or s.get("near")
+                try:
+                    base = float(cand) if cand else 0.0
+                except (TypeError, ValueError):
+                    base = 0.0
+                break
+    if not base:
+        base = float(BASES.get(symbol, 1000))
     candles = []; now = datetime.now(); price = base
     for i in range(n, 0, -1):
         ts = now - timedelta(minutes=interval * i)
@@ -1857,13 +1871,20 @@ def get_chart_data(symbol: str, interval: str = "5"):
         cached = _MCX_CHART_CACHE.get(cache_key)
         if cached and time.time() - cached["ts"] < _MCX_CHART_TTL:
             candles = cached["candles"]
+            yf_ok = True
         else:
-            candles = _fetch_mcx_chart(symbol, ivl)
-            if candles:
-                _MCX_CHART_CACHE[cache_key] = {"candles": candles, "ts": time.time()}
-        yf_ok = bool(candles)
-        if not candles:
-            candles = _fallback_candles(symbol, ivl)
+            # FIXED: never block on Yahoo — slow Yahoo + 25 commodity cards jammed
+            # the browser connection queue ("Loading…" forever). Serve stale/fallback
+            # instantly, refresh cache in a background thread (same as NSE path).
+            import threading
+            def _bg_mcx(sym=symbol, iv=ivl, key=cache_key):
+                c = _fetch_mcx_chart(sym, iv)
+                if c:
+                    _MCX_CHART_CACHE[key] = {"candles": c, "ts": time.time()}
+            threading.Thread(target=_bg_mcx, daemon=True).start()
+            stale = cached["candles"] if cached else []   # stale real data beats simulated
+            candles = stale or _fallback_candles(symbol, ivl)
+            yf_ok = bool(stale)
         return {"symbol": symbol, "interval": interval, "candles": candles,
                 "current_price": candles[-1]["close"] if candles else 0,
                 "source": "MCX_YF" if yf_ok else "FALLBACK",
