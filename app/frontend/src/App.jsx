@@ -115,10 +115,13 @@ function sigIsExpired(s) {
 
 function mergeSignals(prev, incoming) {
   const seen  = new Set(prev.map(sigFingerprint));
+  const tagNew = prev.length > 0;   // don't flash the entire initial load
   const fresh = incoming.filter(s => {
     const fp = sigFingerprint(s);
     if (seen.has(fp)) return false;
-    seen.add(fp); return true;
+    seen.add(fp);
+    if (tagNew) s._new = Date.now();   // drives per-card flash animation
+    return true;
   });
   return [...fresh, ...prev].slice(0, 300);
 }
@@ -128,13 +131,22 @@ const CSS = `
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body,#root{height:100%;width:100%;overflow:hidden}
 :root{
-  --bg:#050c18;--s1:#0b1628;--s2:#0f1e35;--s3:#152540;
-  --br:#1b3050;--br2:#24406a;--text:#dde6f5;--muted:#5a7a9a;--dim:#3d5a7a;
+  --bg:#04070f;--s1:rgba(13,22,40,.72);--s2:rgba(18,30,54,.78);--s3:rgba(24,38,66,.85);
+  --br:rgba(82,130,200,.14);--br2:rgba(100,160,255,.26);--text:#e2eaf8;--muted:#64829f;--dim:#41597a;
   --acc:#00d4ff;--grn:#00ff9d;--yel:#f5c518;--red:#ff3d5a;--orn:#ff6b35;--pur:#a78bfa;
+  --glow-acc:rgba(0,212,255,.35);--glow-grn:rgba(0,255,157,.35);--glow-red:rgba(255,61,90,.35);
+  --glass:blur(14px) saturate(150%);
   --mono:'Space Mono',monospace;--body:'DM Sans',sans-serif;
   --mob-nav-h:56px;
 }
-body{background:var(--bg);color:var(--text);font-family:var(--body)}
+body{
+  background:
+    radial-gradient(ellipse 70% 45% at 18% -8%,rgba(0,212,255,.075),transparent 60%),
+    radial-gradient(ellipse 55% 40% at 88% 8%,rgba(167,139,250,.06),transparent 60%),
+    radial-gradient(ellipse 60% 50% at 50% 110%,rgba(0,255,157,.045),transparent 60%),
+    var(--bg);
+  background-attachment:fixed;
+  color:var(--text);font-family:var(--body)}
 ::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--br2);border-radius:2px}
 .app{display:flex;width:100vw;height:100vh;height:100dvh;overflow:hidden;position:fixed;top:0;left:0}
 .sidebar{width:232px;min-width:232px;background:var(--s1);border-right:1px solid var(--br);display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0}
@@ -339,6 +351,104 @@ body{background:var(--bg);color:var(--text);font-family:var(--body)}
 @media(max-width:900px){.sidebar{display:none}.mob-nav{display:flex}.app{padding-bottom:var(--mob-nav-h)}.content{padding:10px}.sigs-grid{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}.idx-strip{grid-template-columns:repeat(2,1fr)}.movers-grid{grid-template-columns:1fr}.plans-grid{grid-template-columns:repeat(2,1fr)}.topbar{padding:0 10px;gap:6px}.src-pill{display:none}}
 @media(max-width:600px){.stats-grid{grid-template-columns:repeat(2,1fr);gap:6px}.plans-grid{grid-template-columns:1fr 1fr}.form-row{grid-template-columns:1fr}.billing-toggle{width:100%}.billing-tab{flex:1;text-align:center}.tl-row{grid-template-columns:0.5fr 1fr 0.7fr 0.5fr auto}.topbar-right .badge:not(:last-child){display:none}}
 @media(min-width:1400px){.sigs-grid{grid-template-columns:repeat(3,1fr)}}
+
+/* ════════ NEON GLASS THEME LAYER — overrides only, structure untouched ════════ */
+
+/* Frosted chrome — nav surfaces get real glass blur */
+.sidebar,.topbar,.ticker-bar,.tabs,.mob-nav{background:rgba(9,16,30,.66);backdrop-filter:var(--glass);-webkit-backdrop-filter:var(--glass)}
+.sidebar{border-right:1px solid rgba(82,130,200,.12)}
+
+/* Animated logo shimmer */
+.logo-t{background:linear-gradient(90deg,var(--acc) 0%,#7df9ff 25%,var(--acc) 50%,#a78bfa 75%,var(--acc) 100%);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:logoShimmer 7s linear infinite}
+@keyframes logoShimmer{0%{background-position:0% 0}100%{background-position:300% 0}}
+
+/* Glass cards with hover lift + glow */
+.sig-card,.stat-card,.card,.idx-card,.mover-table,.plan-card,.tl-section,.paper-trade-form,.login-card,.strat-seg-card{
+  background:linear-gradient(160deg,rgba(20,33,60,.85),rgba(11,19,36,.92));
+  border:1px solid rgba(96,148,224,.13);
+  box-shadow:0 4px 22px rgba(0,0,0,.35),inset 0 1px 0 rgba(150,200,255,.05)}
+.sig-card{animation:cardIn .38s cubic-bezier(.21,.8,.35,1) both}
+@keyframes cardIn{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+.sigs-grid>.sig-card:nth-child(2){animation-delay:.05s}
+.sigs-grid>.sig-card:nth-child(3){animation-delay:.1s}
+.sigs-grid>.sig-card:nth-child(4){animation-delay:.15s}
+.sigs-grid>.sig-card:nth-child(5){animation-delay:.2s}
+.sigs-grid>.sig-card:nth-child(n+6){animation-delay:.25s}
+.sig-card:hover{border-color:rgba(0,212,255,.4);transform:translateY(-3px);box-shadow:0 10px 34px rgba(0,0,0,.5),0 0 22px rgba(0,212,255,.09),inset 0 1px 0 rgba(150,200,255,.08);transition:all .22s cubic-bezier(.21,.8,.35,1)}
+.bull::before{background:linear-gradient(90deg,var(--grn),rgba(0,255,157,.05));box-shadow:0 0 12px var(--glow-grn)}
+.bear::before{background:linear-gradient(90deg,var(--red),rgba(255,61,90,.05));box-shadow:0 0 12px var(--glow-red)}
+.neut::before{background:linear-gradient(90deg,var(--acc),rgba(0,212,255,.05));box-shadow:0 0 12px var(--glow-acc)}
+.idx-card:hover,.stat-card:hover{border-color:rgba(0,212,255,.3);box-shadow:0 6px 24px rgba(0,0,0,.45),0 0 16px rgba(0,212,255,.07)}
+.stat-card,.idx-card{transition:border-color .2s,box-shadow .2s}
+
+/* Score number glow */
+.sig-score{text-shadow:0 0 16px currentColor}
+.idx-ltp,.stat-val{text-shadow:0 0 14px rgba(0,212,255,.12)}
+
+/* Inner panels — subtle translucency */
+.sig-chart-wrap,.pcr-gauge,.pcr-chart-wrap,.eq-price-hero,.fo-strikes,.sig-action,.meta-box,.pcr-stat{background:rgba(10,18,34,.6);border:1px solid rgba(82,130,200,.08)}
+.sig-action{border-color:rgba(0,212,255,.14)}
+
+/* Neon buttons */
+.btn-primary,.l-btn,.billing-tab.act,.sig-chart-tab.act{background:linear-gradient(135deg,#00d4ff,#00a3e8);box-shadow:0 0 14px rgba(0,212,255,.35)}
+.btn-primary:hover,.l-btn:hover{opacity:1;box-shadow:0 0 22px rgba(0,212,255,.55)}
+.log-trade-btn:hover{box-shadow:0 0 12px rgba(0,212,255,.3);border-color:rgba(0,212,255,.55)}
+.btn,.log-trade-btn,.sig-chart-tab{transition:all .18s}
+
+/* Nav active state glow */
+.nav-it.act,.mkt-btn.act{background:linear-gradient(90deg,rgba(0,212,255,.13),rgba(0,212,255,.03));border-color:rgba(0,212,255,.28);box-shadow:0 0 14px rgba(0,212,255,.07),inset 0 0 10px rgba(0,212,255,.04)}
+.tab.act{text-shadow:0 0 12px var(--glow-acc)}
+.tab{position:relative}
+.tab.act::after{content:'';position:absolute;bottom:-1px;left:10%;right:10%;height:2px;background:var(--acc);box-shadow:0 0 8px var(--glow-acc);border-radius:2px}
+
+/* Live pulse rings */
+.pulse,.live-dot{box-shadow:0 0 0 0 var(--glow-grn);animation:pulseRing 2s cubic-bezier(.4,0,.6,1) infinite}
+@keyframes pulseRing{0%{box-shadow:0 0 0 0 var(--glow-grn);opacity:1}70%{box-shadow:0 0 0 6px transparent;opacity:.55}100%{box-shadow:0 0 0 0 transparent;opacity:1}}
+
+/* NEW SIGNAL FLASH — fires for every strategy card */
+@keyframes sigFlashUp{
+  0%{border-color:rgba(0,255,157,.9);box-shadow:0 0 0 1px rgba(0,255,157,.7),0 0 30px rgba(0,255,157,.45);background:linear-gradient(160deg,rgba(0,255,157,.16),rgba(11,19,36,.92))}
+  40%{border-color:rgba(0,255,157,.55);box-shadow:0 0 0 1px rgba(0,255,157,.35),0 0 18px rgba(0,255,157,.22)}
+  70%{border-color:rgba(0,255,157,.8);box-shadow:0 0 24px rgba(0,255,157,.35)}
+  100%{border-color:rgba(96,148,224,.13);box-shadow:0 4px 22px rgba(0,0,0,.35);background:linear-gradient(160deg,rgba(20,33,60,.85),rgba(11,19,36,.92))}}
+@keyframes sigFlashDn{
+  0%{border-color:rgba(255,61,90,.9);box-shadow:0 0 0 1px rgba(255,61,90,.7),0 0 30px rgba(255,61,90,.45);background:linear-gradient(160deg,rgba(255,61,90,.16),rgba(11,19,36,.92))}
+  40%{border-color:rgba(255,61,90,.55);box-shadow:0 0 0 1px rgba(255,61,90,.35),0 0 18px rgba(255,61,90,.22)}
+  70%{border-color:rgba(255,61,90,.8);box-shadow:0 0 24px rgba(255,61,90,.35)}
+  100%{border-color:rgba(96,148,224,.13);box-shadow:0 4px 22px rgba(0,0,0,.35);background:linear-gradient(160deg,rgba(20,33,60,.85),rgba(11,19,36,.92))}}
+.sig-flash-up{animation:sigFlashUp 2.4s ease-out 2,cardIn .38s cubic-bezier(.21,.8,.35,1)}
+.sig-flash-dn{animation:sigFlashDn 2.4s ease-out 2,cardIn .38s cubic-bezier(.21,.8,.35,1)}
+
+/* Toast glow-up */
+.sig-toast{backdrop-filter:var(--glass);-webkit-backdrop-filter:var(--glass);background:rgba(9,18,32,.85);box-shadow:0 8px 30px rgba(0,0,0,.5),0 0 24px rgba(0,255,157,.18)}
+
+/* PCR gauge fill — animated sheen */
+.pcr-bar-fill{position:relative;overflow:hidden}
+.pcr-bar-fill::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent);transform:translateX(-100%);animation:sheen 2.8s ease-in-out infinite}
+@keyframes sheen{0%,60%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:linear-gradient(180deg,rgba(0,212,255,.35),rgba(82,130,200,.25));border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:rgba(0,212,255,.5)}
+
+/* Inputs focus glow */
+.l-inp:focus,.form-inp:focus,.form-sel:focus{border-color:rgba(0,212,255,.6);box-shadow:0 0 0 2px rgba(0,212,255,.12)}
+
+/* Plan cards */
+.plan-card.current{border-color:rgba(0,212,255,.5);box-shadow:0 0 26px rgba(0,212,255,.1),inset 0 0 24px rgba(0,212,255,.03)}
+.plan-card:hover{border-color:rgba(0,212,255,.32);transform:translateY(-2px);transition:all .2s}
+
+/* Mover rows hover */
+.mover-row{transition:background .15s}
+.mover-row:hover{background:rgba(0,212,255,.04)}
+
+/* Accessibility — kill heavy motion if user prefers */
+@media(prefers-reduced-motion:reduce){
+  .sig-card,.sig-flash-up,.sig-flash-dn{animation:none}
+  .logo-t{animation:none}
+  .pcr-bar-fill::after{animation:none}
+}
 `;
 
 function skey(n){const m=(n||"").match(/^([SE]\d)/i);return m?m[1].toUpperCase():"S1";}
@@ -350,9 +460,33 @@ function chgClass(c){return c>0?"tick-up":c<0?"tick-dn":"tick-unch";}
 function matchesMarket(sig,market){if(market==="ALL")return true;if(market==="EQUITY")return sig.market==="EQUITY";if(market==="COMMODITY")return sig.market==="COMMODITY";const inst=(sig.instrument||sig.symbol||"").toUpperCase();return inst===market&&sig.market!=="EQUITY"&&sig.market!=="COMMODITY";}
 function matchesStrategy(sig,stratLabel){if(!stratLabel)return true;return skey(sig.strategy)===skey(stratLabel);}
 
+// Custom candlestick shape for recharts Bar (dataKey must be [low, high] range)
+function CandleShape(props){
+  const {x,width,y,height,payload}=props;
+  if(!payload||payload.high==null||payload.low==null)return null;
+  const {open,close,high,low}=payload;
+  const up=close>=open;
+  const color=up?"#00ff9d":"#ff3d5a";
+  const cx=x+width/2;
+  const range=high-low;
+  const bw=Math.max(1.5,Math.min(7,width*0.62));
+  if(range<=0||height<=0){
+    return <line x1={cx-bw/2} x2={cx+bw/2} y1={y} y2={y} stroke={color} strokeWidth={1.2}/>;
+  }
+  const px=height/range;                            // pixels per price point
+  const bodyTop=y+(high-Math.max(open,close))*px;
+  const bodyH=Math.max(1,Math.abs(close-open)*px);
+  return(<g>
+    <line x1={cx} x2={cx} y1={y} y2={y+height} stroke={color} strokeWidth={1} opacity={0.9}/>
+    <rect x={cx-bw/2} y={bodyTop} width={bw} height={bodyH} fill={up?color:color}
+          fillOpacity={up?0.95:0.95} rx={0.5}/>
+  </g>);
+}
+
 function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction,currency="₹"}){
   const [candles,setCandles]=useState([]);
   const [ivl,setIvl]=useState("5");
+  const [mode,setMode]=useState("candle");   // "candle" | "line"
   const [loading,setLoading]=useState(false);
   const [src,setSrc]=useState("");
   const ref=useRef(null);
@@ -365,27 +499,45 @@ function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction,curren
   },[symbol,ivl]);
   if(loading)return(<div className="sig-chart-wrap" ref={ref}><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>Loading…</div></div>);
   if(!candles.length)return(<div className="sig-chart-wrap" ref={ref}><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>No data</div></div>);
-  const data=candles.map(c=>({t:c.time.slice(11,16),price:c.close,open:c.open,high:c.high,low:c.low}));
+  const data=candles.map(c=>({t:c.time.slice(11,16),price:c.close,open:c.open,high:c.high,low:c.low,close:c.close,range:[c.low,c.high]}));
   const prices=data.map(d=>d.price);
-  const rawMin=Math.min(...prices);const rawMax=Math.max(...prices);
+  const isCandle=mode==="candle";
+  const rawMin=isCandle?Math.min(...data.map(d=>d.low)):Math.min(...prices);
+  const rawMax=isCandle?Math.max(...data.map(d=>d.high)):Math.max(...prices);
   const pad=rawMax===rawMin?rawMin*0.005:0;
   const minP=(rawMin-pad)*0.998;const maxP=(rawMax+pad)*1.002;
   const dirColor=direction==="BUY"||direction==="LONG"?"var(--grn)":"var(--red)";
+  const srcTag=src==="FALLBACK"?" • SIM":src.startsWith("DHAN")?" • DHAN":src.startsWith("YAHOO")?" • YF":"";
   return(<div className="sig-chart-wrap" ref={ref}>
     <div className="sig-chart-header">
-      <span className="sig-chart-title">{symbol} • {ivl}m{src==="FALLBACK"?" • SIM":""}</span>
+      <span className="sig-chart-title">{symbol} • {ivl}m{srcTag}</span>
       <div style={{display:"flex",alignItems:"center",gap:6}}>
         <span className="sig-chart-price" style={{color:dirColor}}>{currency}{fmt(prices[prices.length-1],currency==="$"?2:0)}</span>
+        <div className="sig-chart-tabs">
+          <div className={`sig-chart-tab ${isCandle?"act":""}`} onClick={()=>setMode("candle")} title="Candlestick">▮</div>
+          <div className={`sig-chart-tab ${!isCandle?"act":""}`} onClick={()=>setMode("line")} title="Line">∿</div>
+        </div>
         <div className="sig-chart-tabs">{["1","3","5","15","30"].map(iv=>(<div key={iv} className={`sig-chart-tab ${ivl===iv?"act":""}`} onClick={()=>setIvl(iv)}>{iv}m</div>))}</div>
       </div>
     </div>
     <ResponsiveContainer width="100%" height={120}>
       <ComposedChart data={data} margin={{top:2,right:4,bottom:0,left:0}}>
         <CartesianGrid strokeDasharray="2 4" stroke="rgba(27,48,80,.6)"/>
-        <XAxis dataKey="t" tick={{fontSize:6,fill:"var(--dim)"}} tickLine={false} interval={9}/>
+        <XAxis dataKey="t" tick={{fontSize:6,fill:"var(--dim)"}} tickLine={false} interval={Math.max(1,Math.floor(data.length/7))}/>
         <YAxis domain={[minP,maxP]} tick={{fontSize:6,fill:"var(--dim)"}} tickLine={false} width={40} tickFormatter={v=>v>=1000?`${(v/1000).toFixed(1)}k`:v.toFixed(0)}/>
-        <Tooltip contentStyle={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:6,fontSize:9}} formatter={(val,name)=>[`${currency}${Number(val).toLocaleString("en-IN")}`,name]} labelFormatter={l=>l+" IST"}/>
-        <Area type="monotone" dataKey="price" stroke={dirColor} strokeWidth={1.5} fill={direction==="BUY"||direction==="LONG"?"rgba(0,255,157,.07)":"rgba(255,61,90,.07)"} dot={false} name="Price"/>
+        <Tooltip contentStyle={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:6,fontSize:9}}
+          formatter={(val,name)=>{
+            if(name==="OHLC")return null;
+            return [`${currency}${Number(val).toLocaleString("en-IN")}`,name];
+          }}
+          labelFormatter={(l,pl)=>{
+            const p=pl&&pl[0]&&pl[0].payload;
+            if(p&&isCandle)return `${l} IST  O:${fmt(p.open,0)} H:${fmt(p.high,0)} L:${fmt(p.low,0)} C:${fmt(p.close,0)}`;
+            return l+" IST";
+          }}/>
+        {isCandle
+          ?<Bar dataKey="range" shape={<CandleShape/>} isAnimationActive={false} name="OHLC"/>
+          :<Area type="monotone" dataKey="price" stroke={dirColor} strokeWidth={1.5} fill={direction==="BUY"||direction==="LONG"?"rgba(0,255,157,.07)":"rgba(255,61,90,.07)"} dot={false} name="Price"/>}
         {entryPrice&&<Line type="monotone" dataKey={()=>entryPrice} stroke="var(--acc)" strokeWidth={1} strokeDasharray="3 2" dot={false} name="Entry"/>}
         {targetPrice&&<Line type="monotone" dataKey={()=>targetPrice} stroke="var(--grn)" strokeWidth={1} strokeDasharray="3 2" dot={false} name="Target"/>}
         {slPrice&&<Line type="monotone" dataKey={()=>slPrice} stroke="var(--red)" strokeWidth={1} strokeDasharray="3 2" dot={false} name="SL"/>}
@@ -488,6 +640,9 @@ function sigExpiredLabel(s) {
 }
 
 function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
+  // New-signal flash — applies to every strategy variant (PCR, Commodity, Equity, F&O)
+  const isNewSig=sig._new&&(Date.now()-sig._new<8000);
+  const flashCls=isNewSig?(sigClass(sig.direction)==="bear"?" sig-flash-dn":" sig-flash-up"):"";
   const isPcr=(sig.strategy||"").toUpperCase().includes("PCR")||sig.source==="pcr_strategy"||sig.source==="pcr_mock";
   const isEq=sig.market==="EQUITY";
   const isCommodity=sig.market==="COMMODITY";
@@ -502,7 +657,7 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
     const zoneCol=PCR_ZONE_COLOR[zone]||"var(--muted)";
     const barWidth=Math.round(Math.min(2,Math.max(0,pcr||1))/2*100);
     const barColor=zone==="OVERSOLD"?"var(--grn)":zone==="OVERBOUGHT"?"var(--red)":"var(--yel)";
-    return(<div className={`sig-card ${sigClass(sig.direction)}`}>
+    return(<div className={`sig-card ${sigClass(sig.direction)}${flashCls}`}>
       <div className="sig-top"><div>
         <div className="sig-strat" style={{color:"#22c55e"}}>S5 PCR CONTRARIAN</div>
         <div className="sig-tags">
@@ -542,7 +697,7 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
     const chg=0; // YF futures don't provide daily change in signal payload
     const unit=sig.unit||"";
     const exchange=sig.exchange||"MCX";
-    return(<div className={`sig-card ${sigClass(sig.direction)}`}>
+    return(<div className={`sig-card ${sigClass(sig.direction)}${flashCls}`}>
       <div className="sig-top"><div>
         <div className="sig-strat" style={{color:col}}>{sig.strategy}<span style={{fontSize:8,marginLeft:5,color:"#ffd70099",fontFamily:"var(--mono)"}}>{exchange}</span></div>
         <div className="sig-tags">
@@ -588,7 +743,7 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
   if(isEq){
     const info=STRAT_INFO[skey(sig.strategy)]||{color:"var(--pur)",tag:""};
     const ltp=sig.ltp||sig.spot||0;const chg=sig.change_pct||0;
-    return(<div className={`sig-card ${sigClass(sig.direction)}`}>
+    return(<div className={`sig-card ${sigClass(sig.direction)}${flashCls}`}>
       <div className="sig-top"><div>
         <div className="sig-strat" style={{color:info.color}}>{sig.strategy}<SourceBadge source={sig.source}/></div>
         <div className="sig-tags">
@@ -622,7 +777,7 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
   const k=skey(sig.strategy);const info=STRAT_INFO[k]||{color:"var(--acc)",tag:"NEUTRAL"};
   const spread=sig.spread??sig.entry_spread;
   const isCalendar=sig.strategy?.toUpperCase().includes("CALENDAR");
-  return(<div className={`sig-card ${sigClass(sig.direction)}`}>
+  return(<div className={`sig-card ${sigClass(sig.direction)}${flashCls}`}>
     <div className="sig-top"><div>
       <div className="sig-strat" style={{color:info.color}}>{sig.strategy}</div>
       <div className="sig-tags">
@@ -1957,3 +2112,4 @@ function AuditPanel() {
 }
 
 export default App;
+// v1.2.0 — neon glass theme, candlestick charts, signal flash, Dhan chart fallback

@@ -1812,6 +1812,114 @@ def _fallback_candles(symbol: str, interval: int, n: int = 60) -> list:
         price = c
     return candles
 
+# ── Dhan intraday chart fallback (real OHLC when NSE scrape is blocked) ──────
+# Dhan /v2/charts/intraday — works with the trading-API token (no paid data sub)
+_DHAN_IDX_SECURITY = {                      # exchangeSegment = IDX_I
+    "NIFTY": "13", "BANKNIFTY": "25", "FINNIFTY": "27", "VIX": "12",
+}
+
+def _fetch_dhan_intraday(symbol: str) -> list:
+    """Real 1-min OHLC candles from Dhan charts API. Indices only. [] on failure."""
+    sec_id = _DHAN_IDX_SECURITY.get(symbol)
+    token = os.environ.get("DHAN_ACCESS_TOKEN", "").strip()
+    client = os.environ.get("DHAN_CLIENT_ID", "").strip()
+    if not (sec_id and token and client):
+        return []
+    try:
+        import requests as _r
+        today = date.today().isoformat()
+        body = {"securityId": sec_id, "exchangeSegment": "IDX_I",
+                "instrument": "INDEX", "interval": "1",
+                "fromDate": today, "toDate": today}
+        r = _r.post("https://api.dhan.co/v2/charts/intraday",
+                    headers={"access-token": token, "client-id": client,
+                             "Content-Type": "application/json"},
+                    json=body, timeout=8)
+        if r.status_code != 200:
+            logging.debug(f"[Chart] Dhan intraday {symbol} HTTP {r.status_code}")
+            return []
+        d = r.json()
+        opens, highs = d.get("open") or [], d.get("high") or []
+        lows, closes = d.get("low") or [], d.get("close") or []
+        vols, stamps = d.get("volume") or [], d.get("timestamp") or []
+        candles = []
+        for i in range(min(len(closes), len(stamps))):
+            try:
+                c = float(closes[i] or 0)
+                if c <= 0:
+                    continue
+                # Dhan timestamps are epoch seconds in IST market time
+                ts = datetime.fromtimestamp(int(stamps[i]))
+                candles.append({
+                    "time":  ts.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "open":  round(float(opens[i] or c), 2),
+                    "high":  round(float(highs[i] or c), 2),
+                    "low":   round(float(lows[i]  or c), 2),
+                    "close": round(c, 2),
+                    "volume": int(float(vols[i] or 0)) if i < len(vols) else 0,
+                })
+            except (TypeError, ValueError, IndexError):
+                continue
+        return candles
+    except Exception as e:
+        logging.debug(f"[Chart] Dhan intraday fetch failed for {symbol}: {e}")
+        return []
+
+_YF_CHART_TICKERS = {
+    "NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK",
+    "FINNIFTY": "^CNXFINANCE", "VIX": "^INDIAVIX",
+}
+
+def _fetch_yahoo_intraday(symbol: str) -> list:
+    """Yahoo Finance 1-min candles — final real-data fallback. [] on failure."""
+    ticker = _YF_CHART_TICKERS.get(symbol) or f"{symbol}.NS"
+    try:
+        import requests as _r
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+               f"?interval=1m&range=1d")
+        r = _r.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        if r.status_code != 200:
+            return []
+        data = r.json()["chart"]["result"][0]
+        stamps = data["timestamp"]
+        q = data["indicators"]["quote"][0]
+        candles = []
+        for i, ts in enumerate(stamps):
+            try:
+                c = float((q.get("close") or [])[i] or 0)
+                if c <= 0:
+                    continue
+                # Yahoo epoch is UTC — shift to IST for display consistency
+                t = datetime.utcfromtimestamp(ts) + timedelta(hours=5, minutes=30)
+                candles.append({
+                    "time":  t.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "open":  round(float((q.get("open") or [])[i] or c), 2),
+                    "high":  round(float((q.get("high") or [])[i] or c), 2),
+                    "low":   round(float((q.get("low")  or [])[i] or c), 2),
+                    "close": round(c, 2),
+                    "volume": int(float((q.get("volume") or [])[i] or 0)),
+                })
+            except (TypeError, ValueError, IndexError):
+                continue
+        return candles
+    except Exception as e:
+        logging.debug(f"[Chart] Yahoo intraday fetch failed for {symbol}: {e}")
+        return []
+
+def _fetch_chart_any(symbol: str) -> list:
+    """Fetch real candles: NSE → Dhan → Yahoo. Caches with source tag."""
+    candles = _fetch_nse_intraday(symbol)   # writes its own cache entry on success
+    src = "NSE_LIVE"
+    if not candles:
+        candles = _fetch_dhan_intraday(symbol)
+        src = "DHAN_LIVE"
+    if not candles:
+        candles = _fetch_yahoo_intraday(symbol)
+        src = "YAHOO_LIVE"
+    if candles:
+        _chart_cache[symbol] = {"candles": candles, "ts": time.time(), "src": src}
+    return candles
+
 # ── MCX commodity chart (Yahoo Finance) ──────────────────────────────────────
 _MCX_CHART_TICKERS = {
     "GOLD": "GC=F", "SILVER": "SI=F", "CRUDEOIL": "CL=F",
@@ -1891,18 +1999,27 @@ def get_chart_data(symbol: str, interval: str = "5"):
                 "currency": "USD",
                 "timestamp": datetime.now().isoformat()}
 
-    # ── NSE indices / equities — existing logic ──────────────────────────────
-    # Return fallback immediately if no cache — don't block the request
+    # ── NSE indices / equities — NSE → Dhan → Yahoo → simulated ─────────────
+    # Never block the request: serve cache (fresh or stale real data) instantly,
+    # refresh in background. Simulated candles only if no real data ever fetched.
     cached = _chart_cache.get(symbol)
     if cached and time.time() - cached["ts"] < _CHART_TTL:
         candles = _resample_candles(cached["candles"], ivl)
+        src = cached.get("src", "NSE_LIVE").replace("_LIVE", "_CACHED")
         return {"symbol": symbol, "interval": interval, "candles": candles,
                 "current_price": candles[-1]["close"] if candles else 0,
-                "source": "NSE_CACHED", "timestamp": datetime.now().isoformat()}
-    # No cache — return fallback instantly, trigger background fetch
-    candles = _fallback_candles(symbol, ivl)
+                "source": src, "timestamp": datetime.now().isoformat()}
+    # Cache stale or missing — trigger background refresh through fallback chain
     import threading
-    threading.Thread(target=_fetch_nse_intraday, args=(symbol,), daemon=True).start()
+    threading.Thread(target=_fetch_chart_any, args=(symbol,), daemon=True).start()
+    if cached and cached.get("candles"):
+        # Stale real data beats simulated — same policy as the MCX path
+        candles = _resample_candles(cached["candles"], ivl)
+        src = cached.get("src", "NSE_LIVE").replace("_LIVE", "_STALE")
+        return {"symbol": symbol, "interval": interval, "candles": candles,
+                "current_price": candles[-1]["close"] if candles else 0,
+                "source": src, "timestamp": datetime.now().isoformat()}
+    candles = _fallback_candles(symbol, ivl)
     return {"symbol": symbol, "interval": interval, "candles": candles,
             "current_price": candles[-1]["close"] if candles else 0,
             "source": "FALLBACK", "timestamp": datetime.now().isoformat()}
