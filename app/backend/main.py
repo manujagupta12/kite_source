@@ -2761,10 +2761,9 @@ def broker_orders_list(user=Depends(get_current_user)):
     return {"orders": _get_broker().get_orders()}
 
 @app.get("/broker/upstox-auth")
-def upstox_auth_redirect():  # Upstox disabled — not in use
-    raise HTTPException(410, "Upstox integration is not enabled on this platform")
-async def _upstox_auth_redirect_disabled():
-    """Step 1: Open this URL in browser to authenticate Upstox."""
+def upstox_auth_redirect():
+    """Step 1: Open this URL in browser to authenticate Upstox.
+    Re-enabled 2026-06-11 — Upstox is now a configured data source."""
     if not _BROKER_OK:
         raise HTTPException(503, "broker.py not loaded")
     api_key = os.environ.get("UPSTOX_API_KEY", "")

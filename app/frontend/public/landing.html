@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AlgoTrade — Crystal-Clear NSE F&O Signals</title>
+<meta name="description" content="Live BANKNIFTY & NIFTY trading signals — Calendar Spread, Iron Condor, PCR, Equity momentum. Real NSE data, transparent backtests, paper-trade first.">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600;700;800&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#04070f;--s1:rgba(13,22,40,.72);--s2:rgba(18,30,54,.8);
+  --br:rgba(82,130,200,.14);--br2:rgba(100,160,255,.3);
+  --text:#e2eaf8;--muted:#64829f;--dim:#41597a;
+  --acc:#00d4ff;--grn:#00ff9d;--yel:#f5c518;--red:#ff3d5a;--pur:#a78bfa;
+  --mono:'Space Mono',monospace;--body:'DM Sans',sans-serif;
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--body);overflow-x:hidden}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:linear-gradient(180deg,rgba(0,212,255,.4),rgba(82,130,200,.25));border-radius:3px}
+
+/* ── 3D canvas ─────────────────────────────────────────── */
+#crystal-bg{position:fixed;inset:0;z-index:0;pointer-events:none}
+.vignette{position:fixed;inset:0;z-index:1;pointer-events:none;
+  background:radial-gradient(ellipse 80% 60% at 50% 38%,transparent 40%,rgba(4,7,15,.72) 100%)}
+
+/* ── Nav ───────────────────────────────────────────────── */
+nav{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;
+  padding:18px 5vw;background:linear-gradient(180deg,rgba(4,7,15,.92),rgba(4,7,15,.55) 75%,transparent)}
+.logo{font-family:var(--mono);font-weight:700;font-size:15px;letter-spacing:3px;
+  background:linear-gradient(90deg,#00d4ff,#7df9ff,#a78bfa,#00d4ff);background-size:300% 100%;
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  animation:shimmer 7s linear infinite}
+@keyframes shimmer{to{background-position:300% 0}}
+.nav-links{margin-left:auto;display:flex;gap:26px;align-items:center}
+.nav-links a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;transition:color .2s}
+.nav-links a:hover{color:var(--text)}
+.btn{display:inline-block;text-decoration:none;border:none;cursor:pointer;font-family:var(--body);
+  font-weight:700;border-radius:9px;transition:all .22s;text-align:center}
+.btn-primary{background:linear-gradient(135deg,#00d4ff,#00a3e8);color:#021018;
+  padding:11px 26px;font-size:14px;box-shadow:0 0 22px rgba(0,212,255,.35)}
+.btn-primary:hover{box-shadow:0 0 36px rgba(0,212,255,.6);transform:translateY(-2px)}
+.btn-ghost{background:rgba(0,212,255,.06);color:var(--acc);border:1px solid rgba(0,212,255,.35);
+  padding:10px 24px;font-size:14px}
+.btn-ghost:hover{background:rgba(0,212,255,.14);box-shadow:0 0 18px rgba(0,212,255,.25)}
+.btn-sm{padding:8px 18px;font-size:12px}
+
+/* ── Hero ──────────────────────────────────────────────── */
+main{position:relative;z-index:2}
+.hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;padding:120px 5vw 60px}
+.hero-pill{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;color:var(--grn);
+  border:1px solid rgba(0,255,157,.3);background:rgba(0,255,157,.06);border-radius:20px;
+  padding:6px 16px;margin-bottom:26px;animation:fadeUp .8s ease-out both}
+.hero h1{font-size:clamp(34px,6vw,72px);font-weight:800;line-height:1.06;letter-spacing:-1.5px;
+  max-width:900px;animation:fadeUp .8s .12s ease-out both}
+.hero h1 .grad{background:linear-gradient(95deg,#00d4ff 10%,#00ff9d 50%,#a78bfa 90%);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.hero p.sub{font-size:clamp(15px,1.6vw,19px);color:var(--muted);max-width:620px;line-height:1.65;
+  margin:24px 0 38px;animation:fadeUp .8s .24s ease-out both}
+.hero-ctas{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;animation:fadeUp .8s .36s ease-out both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── Live ticker strip ─────────────────────────────────── */
+.live-strip{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;margin-top:54px;
+  animation:fadeUp .8s .5s ease-out both}
+.live-chip{background:var(--s1);border:1px solid var(--br);border-radius:12px;padding:12px 22px;
+  font-family:var(--mono);backdrop-filter:blur(6px);min-width:150px}
+.live-chip .k{font-size:9px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase}
+.live-chip .v{font-size:19px;font-weight:700;margin-top:3px}
+.live-chip .c{font-size:10px;margin-top:1px}
+.up{color:var(--grn)}.dn{color:var(--red)}.nt{color:var(--acc)}
+.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--grn);
+  margin-right:7px;animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* ── Sections ──────────────────────────────────────────── */
+section{padding:110px 5vw;max-width:1240px;margin:0 auto}
+.sec-tag{font-family:var(--mono);font-size:11px;letter-spacing:2.5px;color:var(--acc);
+  text-transform:uppercase;margin-bottom:14px}
+.sec-title{font-size:clamp(26px,3.6vw,42px);font-weight:800;letter-spacing:-1px;line-height:1.15;margin-bottom:14px}
+.sec-sub{color:var(--muted);font-size:16px;line-height:1.7;max-width:640px;margin-bottom:48px}
+
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+.card{background:linear-gradient(160deg,rgba(20,33,60,.85),rgba(11,19,36,.92));
+  border:1px solid var(--br);border-radius:16px;padding:28px;position:relative;overflow:hidden;
+  transition:all .25s;opacity:0;transform:translateY(28px)}
+.card.inview{opacity:1;transform:translateY(0)}
+.card:hover{border-color:rgba(0,212,255,.4);transform:translateY(-4px);
+  box-shadow:0 14px 40px rgba(0,0,0,.5),0 0 26px rgba(0,212,255,.08)}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,var(--c,#00d4ff),transparent)}
+.card .ico{font-size:26px;margin-bottom:16px;filter:drop-shadow(0 0 10px var(--c,#00d4ff))}
+.card h3{font-size:17px;font-weight:700;margin-bottom:9px}
+.card h3 .tag{font-family:var(--mono);font-size:9px;letter-spacing:1px;padding:3px 8px;border-radius:4px;
+  margin-left:8px;vertical-align:2px;background:rgba(0,212,255,.1);color:var(--acc);border:1px solid rgba(0,212,255,.25)}
+.card p{color:var(--muted);font-size:13.5px;line-height:1.7}
+.card .stat{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:14px;
+  padding-top:12px;border-top:1px solid var(--br)}
+
+/* ── How it works ──────────────────────────────────────── */
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;counter-reset:step}
+.step{background:var(--s1);border:1px solid var(--br);border-radius:14px;padding:26px;position:relative;
+  opacity:0;transform:translateY(28px);transition:all .25s}
+.step.inview{opacity:1;transform:translateY(0)}
+.step::before{counter-increment:step;content:counter(step,decimal-leading-zero);
+  font-family:var(--mono);font-size:34px;font-weight:700;color:rgba(0,212,255,.18);
+  position:absolute;top:14px;right:18px}
+.step h4{font-size:15px;font-weight:700;margin-bottom:8px;color:var(--acc)}
+.step p{color:var(--muted);font-size:13px;line-height:1.65}
+
+/* ── Pricing ───────────────────────────────────────────── */
+.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px}
+.plan{background:linear-gradient(160deg,rgba(20,33,60,.85),rgba(11,19,36,.92));
+  border:1px solid var(--br);border-radius:18px;padding:32px;position:relative;
+  transition:all .25s;opacity:0;transform:translateY(28px)}
+.plan.inview{opacity:1;transform:translateY(0)}
+.plan:hover{transform:translateY(-4px);border-color:rgba(0,212,255,.35)}
+.plan.featured{border-color:rgba(0,212,255,.5);box-shadow:0 0 34px rgba(0,212,255,.12)}
+.plan .badge{position:absolute;top:-11px;left:50%;transform:translateX(-50%);
+  font-family:var(--mono);font-size:9px;letter-spacing:1.5px;padding:4px 14px;border-radius:12px;
+  background:linear-gradient(135deg,#00d4ff,#00a3e8);color:#021018;font-weight:700}
+.plan h3{font-family:var(--mono);font-size:14px;letter-spacing:1px;margin-bottom:14px}
+.plan .price{font-family:var(--mono);font-size:40px;font-weight:700;color:var(--acc);line-height:1}
+.plan .per{font-size:12px;color:var(--muted);margin:4px 0 22px}
+.plan ul{list-style:none;display:flex;flex-direction:column;gap:10px;margin-bottom:26px}
+.plan li{font-size:13px;color:var(--muted);display:flex;gap:9px;align-items:flex-start;line-height:1.5}
+.plan li::before{content:'✓';color:var(--grn);font-weight:700;flex-shrink:0}
+.plan li.na{opacity:.4}.plan li.na::before{content:'—';color:var(--dim)}
+
+/* ── Honesty / backtest strip ──────────────────────────── */
+.honest{background:rgba(245,197,24,.05);border:1px solid rgba(245,197,24,.22);border-radius:16px;
+  padding:30px 34px;display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.honest .ico{font-size:30px}
+.honest h4{color:var(--yel);font-size:16px;margin-bottom:8px}
+.honest p{color:var(--muted);font-size:13.5px;line-height:1.7;max-width:880px}
+
+/* ── CTA + footer ──────────────────────────────────────── */
+.cta-final{text-align:center;padding:130px 5vw}
+.cta-final h2{font-size:clamp(28px,4.4vw,52px);font-weight:800;letter-spacing:-1px;margin-bottom:18px}
+.cta-final p{color:var(--muted);margin-bottom:36px;font-size:16px}
+footer{border-top:1px solid var(--br);padding:46px 5vw;position:relative;z-index:2;background:rgba(4,7,15,.85)}
+.foot-grid{max-width:1240px;margin:0 auto;display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap}
+.foot-grid .col p,.foot-grid .col a{color:var(--muted);font-size:12.5px;line-height:1.9;text-decoration:none;display:block}
+.foot-grid .col a:hover{color:var(--text)}
+.foot-grid h5{font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim);margin-bottom:12px}
+.disclaimer{max-width:1240px;margin:34px auto 0;padding-top:26px;border-top:1px solid var(--br);
+  font-size:11px;color:var(--dim);line-height:1.8}
+.disclaimer b{color:var(--red)}
+@media(max-width:700px){.nav-links a:not(.btn){display:none}section{padding:70px 5vw}}
+</style>
+</head>
+<body>
+<canvas id="crystal-bg"></canvas>
+<div class="vignette"></div>
+
+<nav>
+  <div class="logo">ALGOTRADE</div>
+  <div class="nav-links">
+    <a href="#strategies">Strategies</a>
+    <a href="#how">How it works</a>
+    <a href="#pricing">Pricing</a>
+    <a class="btn btn-ghost btn-sm" id="launch-nav" href="http://localhost:5173">Launch Dashboard</a>
+  </div>
+</nav>
+
+<main>
+  <!-- HERO -->
+  <div class="hero">
+    <div class="hero-pill"><span class="live-dot"></span>LIVE NSE F&amp;O SIGNAL ENGINE — <span id="hero-sig-count">—</span> SIGNALS TODAY</div>
+    <h1>Trading signals,<br><span class="grad">crystallized</span> from live NSE data.</h1>
+    <p class="sub">BANKNIFTY &amp; NIFTY option strategies — Calendar Spread, Iron Condor, PCR Contrarian and
+      Equity momentum — computed every 3 seconds from the real option chain, with full trade rationale on every signal.</p>
+    <div class="hero-ctas">
+      <a class="btn btn-primary" id="launch-hero" href="http://localhost:5173">Launch Dashboard →</a>
+      <a class="btn btn-ghost" href="#strategies">Explore Strategies</a>
+    </div>
+    <div class="live-strip" id="live-strip">
+      <div class="live-chip"><div class="k">NIFTY 50</div><div class="v nt" id="lv-nifty">—</div><div class="c" id="lc-nifty"></div></div>
+      <div class="live-chip"><div class="k">BANKNIFTY</div><div class="v nt" id="lv-banknifty">—</div><div class="c" id="lc-banknifty"></div></div>
+      <div class="live-chip"><div class="k">INDIA VIX</div><div class="v nt" id="lv-vix">—</div><div class="c" id="lc-vix"></div></div>
+      <div class="live-chip"><div class="k">Signals Today</div><div class="v up" id="lv-signals">—</div><div class="c" id="lc-signals"></div></div>
+    </div>
+  </div>
+
+  <!-- STRATEGIES -->
+  <section id="strategies">
+    <div class="sec-tag">◈ Signal Engine</div>
+    <div class="sec-title">Seven strategies. One crystal-clear feed.</div>
+    <p class="sec-sub">Every signal carries its full rationale — spread, fair value, deviation, score, targets and
+      stop-loss — so you always know <em>why</em> before you trade.</p>
+    <div class="grid3">
+      <div class="card" style="--c:#00d4ff"><div class="ico">◈</div>
+        <h3>S1 Calendar Spread<span class="tag">NEUTRAL</span></h3>
+        <p>Sells rich near-month BANKNIFTY options against far-month cover when the spread deviates from fair value. Computed live from the NSE option chain every 3 seconds.</p>
+        <div class="stat">ATM strikes · spread vs fair-value model</div></div>
+      <div class="card" style="--c:#00ff9d"><div class="ico">▣</div>
+        <h3>S2 Iron Condor<span class="tag">NEUTRAL</span></h3>
+        <p>Defined-risk range strategy that activates in low-volatility regimes. Wing widths adapt to live VIX and OI concentration.</p>
+        <div class="stat">Backtest: moderate edge · paper-trade first</div></div>
+      <div class="card" style="--c:#22c55e"><div class="ico">⊖</div>
+        <h3>S5 PCR Contrarian<span class="tag">SENTIMENT</span></h3>
+        <p>Tracks the Put/Call OI ratio across the full chain. Fades extreme greed and fear zones with OI-confirmed reversals, refreshed every 90 seconds.</p>
+        <div class="stat">Full-chain OI · live zone gauge on dashboard</div></div>
+      <div class="card" style="--c:#a78bfa"><div class="ico">◮</div>
+        <h3>Equity Momentum<span class="tag">E1–E4</span></h3>
+        <p>EMA crossover, VWAP reversion, opening-range breakout and gap-fill scans across the top-30 NIFTY50 names, every 30 seconds.</p>
+        <div class="stat">30 liquid names · intraday only</div></div>
+      <div class="card" style="--c:#ffd700"><div class="ico">⬡</div>
+        <h3>Gold &amp; Commodities<span class="tag">24/7</span></h3>
+        <p>XAUUSD signals from live Delta Exchange data plus MCX trend and calendar setups — markets that never sleep, monitored around the clock.</p>
+        <div class="stat">XAUUSD · MCX GOLD, SILVER, CRUDE</div></div>
+      <div class="card" style="--c:#ff6b35"><div class="ico">⚡</div>
+        <h3>Multi-Feed Resilience<span class="tag">INFRA</span></h3>
+        <p>NSE direct feed with automatic broker-API and Yahoo fallbacks, circuit breakers and self-healing reconnects. If a source drops, the signals don't.</p>
+        <div class="stat">NSE → Broker API → Yahoo · 3s tick</div></div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section id="how">
+    <div class="sec-tag">◈ Process</div>
+    <div class="sec-title">From raw option chain to actionable signal.</div>
+    <p class="sec-sub">No black box. Every stage is inspectable on the dashboard — including a per-strategy
+      health audit and a real outcome tracker that starts at zero.</p>
+    <div class="steps">
+      <div class="step"><h4>Ingest</h4><p>Live NSE option chain, index ticks and OI scraped directly, with broker-API fallback — refreshed every 3 seconds during market hours.</p></div>
+      <div class="step"><h4>Compute</h4><p>Seven strategy engines score every setup 0–100 using spread fair-value models, OI analysis, volatility filters and momentum confirmation.</p></div>
+      <div class="step"><h4>Explain</h4><p>Each signal ships with entry, target, stop-loss, lots, VIX context and a plain-English reason — the full trade rationale, not just an arrow.</p></div>
+      <div class="step"><h4>Track</h4><p>Log trades in one click, paper-trade risk-free, and watch the accuracy tracker build from your real recorded outcomes. No inflated win rates.</p></div>
+    </div>
+  </section>
+
+  <!-- HONESTY -->
+  <section>
+    <div class="honest">
+      <div class="ico">⚖</div>
+      <div>
+        <h4>Radical transparency — read this before subscribing</h4>
+        <p>We walk-forward backtested five strategies on 1,300 trades of 2024–25 NSE data and publish the honest result:
+        none met our bar for confident full-size live trading yet. EMA Crossover shows the most genuine edge; Iron Condor is
+        moderate; others failed out-of-sample. That's exactly why the platform ships with paper trading, a zero-default
+        accuracy tracker and per-signal rationale — validate with us for 90 days before risking real capital. We'd rather
+        earn your trust than your losses.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section id="pricing">
+    <div class="sec-tag">◈ Pricing</div>
+    <div class="sec-title">Simple plans. Cancel anytime.</div>
+    <p class="sec-sub">Start free with delayed signals and paper trading. Upgrade when the accuracy tracker convinces you.</p>
+    <div class="plans">
+      <div class="plan"><h3>FREE</h3><div class="price">₹0</div><div class="per">forever</div>
+        <ul><li>Dashboard access</li><li>Delayed signals</li><li>Paper trading</li><li class="na">Live real-time signals</li><li class="na">Trade logging</li></ul>
+        <a class="btn btn-ghost" style="width:100%" href="http://localhost:5173">Start Free</a></div>
+      <div class="plan"><h3>WEEKLY</h3><div class="price">₹500</div><div class="per">per week</div>
+        <ul><li>Everything in Free</li><li>Live real-time signals</li><li>Trade logging</li><li>Signal history</li><li class="na">Priority support</li></ul>
+        <a class="btn btn-ghost" style="width:100%" href="http://localhost:5173">Choose Weekly</a></div>
+      <div class="plan featured"><div class="badge">MOST POPULAR</div><h3>MONTHLY</h3><div class="price">₹1,500</div><div class="per">per month</div>
+        <ul><li>Everything in Weekly</li><li>All 7 strategies</li><li>Accuracy tracker</li><li>Gold &amp; MCX signals</li><li>Priority support</li></ul>
+        <a class="btn btn-primary" style="width:100%" href="http://localhost:5173">Choose Monthly</a></div>
+      <div class="plan"><h3>ANNUAL</h3><div class="price">₹10,000</div><div class="per">per year — save 44%</div>
+        <ul><li>Everything in Monthly</li><li>2 months equivalent free</li><li>Early feature access</li><li>Broker integration</li><li>Priority support</li></ul>
+        <a class="btn btn-ghost" style="width:100%" href="http://localhost:5173">Choose Annual</a></div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA -->
+  <div class="cta-final">
+    <h2>See the market <span class="grad" style="background:linear-gradient(95deg,#00d4ff,#00ff9d);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent">crystallize</span>.</h2>
+    <p>Live signals are computing right now. Paper-trade them free — no card required.</p>
+    <a class="btn btn-primary" style="font-size:16px;padding:15px 40px" href="http://localhost:5173">Launch Dashboard →</a>
+  </div>
+</main>
+
+<footer>
+  <div class="foot-grid">
+    <div class="col" style="max-width:300px">
+      <div class="logo" style="margin-bottom:12px">ALGOTRADE</div>
+      <p>NSE F&amp;O signal platform. Real data, honest backtests, full trade rationale.</p>
+    </div>
+    <div class="col"><h5>Platform</h5><a href="#strategies">Strategies</a><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="http://localhost:5173">Dashboard</a></div>
+    <div class="col"><h5>Markets</h5><p>NIFTY 50 F&amp;O</p><p>BANK NIFTY</p><p>FIN NIFTY</p><p>Equity · Gold · MCX</p></div>
+    <div class="col"><h5>Contact</h5><a href="mailto:guptamanuja3@gmail.com">guptamanuja3@gmail.com</a></div>
+  </div>
+  <div class="disclaimer">
+    <b>⚠ RISK DISCLAIMER:</b> Trading in equity and F&amp;O derivatives involves substantial risk of financial loss.
+    All signals on this platform are generated by algorithms and are strictly for informational and educational purposes only.
+    They do not constitute SEBI-registered investment advice, recommendations, or solicitations to buy or sell securities.
+    Past performance of any strategy does not guarantee future results. You may lose some or all of your invested capital —
+    only invest money you can afford to lose. Stock market trading can be habit-forming and financially addictive; if trading is
+    affecting your mental health, relationships, or finances, please seek professional guidance. AlgoTrade is not SEBI-registered
+    (RA registration in progress). © 2026 AlgoTrade.
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ═══════════ 3D CRYSTALLIZATION SCENE ═══════════ */
+(function(){
+  if(!window.THREE) return;                       // CDN blocked → page still works
+  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const canvas=document.getElementById('crystal-bg');
+  const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,1.6));
+  const scene=new THREE.Scene();
+  scene.fog=new THREE.FogExp2(0x04070f,0.055);
+  const camera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,.1,100);
+  camera.position.set(0,0.3,11);
+
+  // Lights — cold cyan key, warm violet rim, green kicker
+  scene.add(new THREE.AmbientLight(0x16263e,1.1));
+  const key=new THREE.PointLight(0x00d4ff,1.6,40);  key.position.set(6,7,8);   scene.add(key);
+  const rim=new THREE.PointLight(0xa78bfa,1.2,40);  rim.position.set(-8,-4,6); scene.add(rim);
+  const kick=new THREE.PointLight(0x00ff9d,0.9,30); kick.position.set(0,-7,4); scene.add(kick);
+
+  // ── Crystal factory: jittered convex shards from icosahedra/octahedra ──
+  function crystalGeo(base,jitter){
+    const g=base.clone();
+    const p=g.attributes.position;
+    for(let i=0;i<p.count;i++){
+      p.setXYZ(i,
+        p.getX(i)*(1+(Math.random()-.5)*jitter),
+        p.getY(i)*(1+(Math.random()-.5)*jitter)*1.45,   // elongate → crystal habit
+        p.getZ(i)*(1+(Math.random()-.5)*jitter));
+    }
+    g.computeVertexNormals();
+    return g;
+  }
+  const palette=[0x00d4ff,0x00ff9d,0xa78bfa,0x4ddfff,0x7df9c9];
+  function crystalMat(color,opacity){
+    return new THREE.MeshPhongMaterial({
+      color,emissive:color,emissiveIntensity:.18,
+      transparent:true,opacity,shininess:90,
+      flatShading:true,side:THREE.DoubleSide,
+      depthWrite:opacity>0.55});
+  }
+
+  const cluster=new THREE.Group();
+  // Hero centerpiece — large slow crystal
+  const hero=new THREE.Mesh(
+    crystalGeo(new THREE.IcosahedronGeometry(2.1,0),.28),
+    crystalMat(0x00d4ff,.34));
+  cluster.add(hero);
+  // Wireframe halo around it
+  const halo=new THREE.LineSegments(
+    new THREE.EdgesGeometry(hero.geometry),
+    new THREE.LineBasicMaterial({color:0x6ee9ff,transparent:true,opacity:.5}));
+  hero.add(halo);
+
+  // Satellite shards
+  const shards=[];
+  for(let i=0;i<26;i++){
+    const size=.18+Math.random()*.65;
+    const base=Math.random()<.5?new THREE.OctahedronGeometry(size,0):new THREE.IcosahedronGeometry(size,0);
+    const m=new THREE.Mesh(crystalGeo(base,.5),
+      crystalMat(palette[i%palette.length],.5+Math.random()*.35));
+    const a=Math.random()*Math.PI*2, r=3.2+Math.random()*5.5;
+    m.position.set(Math.cos(a)*r,(Math.random()-.5)*7,Math.sin(a)*r*.6-(Math.random()*3));
+    m.rotation.set(Math.random()*Math.PI,Math.random()*Math.PI,Math.random()*Math.PI);
+    m.userData={spin:(Math.random()-.5)*.004,bob:Math.random()*Math.PI*2,bobAmp:.15+Math.random()*.3,orbit:(Math.random()-.5)*.0012,r,a};
+    shards.push(m);cluster.add(m);
+  }
+  scene.add(cluster);
+
+  // Crystallizing dust — points drifting toward the cluster
+  const N=reduced?0:900;
+  const pGeo=new THREE.BufferGeometry();
+  const pos=new Float32Array(N*3),vel=new Float32Array(N);
+  for(let i=0;i<N;i++){
+    pos[i*3]=(Math.random()-.5)*30;pos[i*3+1]=(Math.random()-.5)*18;pos[i*3+2]=(Math.random()-.5)*16-2;
+    vel[i]=.0015+Math.random()*.004;
+  }
+  pGeo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  const points=new THREE.Points(pGeo,new THREE.PointsMaterial({
+    color:0x57d8ff,size:.045,transparent:true,opacity:.65,depthWrite:false,
+    blending:THREE.AdditiveBlending}));
+  if(N)scene.add(points);
+
+  // Mouse parallax + scroll response
+  let mx=0,my=0,scrollY=0;
+  addEventListener('mousemove',e=>{mx=(e.clientX/innerWidth-.5)*2;my=(e.clientY/innerHeight-.5)*2;},{passive:true});
+  addEventListener('scroll',()=>{scrollY=window.scrollY;},{passive:true});
+  function resize(){
+    renderer.setSize(innerWidth,innerHeight,false);
+    camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+  }
+  addEventListener('resize',resize);resize();
+
+  let t=0,raf=null,visible=true;
+  // Pause rendering when tab hidden — zero background GPU cost
+  document.addEventListener('visibilitychange',()=>{visible=!document.hidden;if(visible&&!raf)loop();});
+
+  function loop(){
+    raf=visible?requestAnimationFrame(loop):null;
+    if(!visible)return;
+    t+=reduced?0:1;
+    hero.rotation.y+=.0016;hero.rotation.x=Math.sin(t*.0008)*.18;
+    halo.material.opacity=.36+Math.sin(t*.02)*.16;          // breathing glow
+    for(const s of shards){
+      s.rotation.x+=s.userData.spin;s.rotation.y+=s.userData.spin*1.4;
+      s.userData.a+=s.userData.orbit;
+      s.position.x=Math.cos(s.userData.a)*s.userData.r;
+      s.position.z=Math.sin(s.userData.a)*s.userData.r*.6-1.5;
+      s.position.y+=Math.sin(t*.012+s.userData.bob)*.0035*s.userData.bobAmp;
+    }
+    if(N){
+      const pp=pGeo.attributes.position;
+      for(let i=0;i<N;i++){
+        const x=pp.getX(i),y=pp.getY(i),z=pp.getZ(i);
+        const d=Math.hypot(x,y,z);
+        if(d<1.6){ // crystallized → respawn at edge
+          pp.setXYZ(i,(Math.random()-.5)*30,(Math.random()-.5)*18,(Math.random()-.5)*16-2);
+        }else{
+          pp.setXYZ(i,x-(x/d)*vel[i],y-(y/d)*vel[i],z-(z/d)*vel[i]);
+        }
+      }
+      pp.needsUpdate=true;
+      points.rotation.y+=.0003;
+    }
+    // Camera drift: parallax + gentle scroll dolly
+    camera.position.x+=((mx*1.4)-camera.position.x)*.03;
+    camera.position.y+=((-my*.9+.3-scrollY*.0012)-camera.position.y)*.03;
+    camera.lookAt(0,0,0);
+    renderer.render(scene,camera);
+  }
+  loop();
+})();
+
+/* ═══════════ Scroll-reveal for cards/steps/plans ═══════════ */
+(function(){
+  const io=new IntersectionObserver(es=>es.forEach(e=>{
+    if(e.isIntersecting){e.target.classList.add('inview');io.unobserve(e.target);}
+  }),{threshold:.12});
+  document.querySelectorAll('.card,.step,.plan').forEach((el,i)=>{
+    el.style.transitionDelay=(i%6)*60+'ms';io.observe(el);
+  });
+})();
+
+/* ═══════════ Live data from backend (graceful fallback) ═══════════ */
+(function(){
+  // Same-origin '/api' in production (nginx proxies it); localhost for dev
+  const API=location.hostname==='localhost'&&location.port!=='8000'
+    ?'http://localhost:8000':'/api';
+  const $=id=>document.getElementById(id);
+
+  function setChip(key,ltp,chg,dec){
+    if(ltp==null)return;
+    const v=$('lv-'+key),c=$('lc-'+key);
+    v.textContent=Number(ltp).toLocaleString('en-IN',{minimumFractionDigits:dec,maximumFractionDigits:dec});
+    v.className='v '+(chg>0?'up':chg<0?'dn':'nt');
+    if(chg!=null&&c){c.textContent=(chg>0?'▲ +':chg<0?'▼ ':'')+Number(chg).toFixed(2)+'%';c.className='c '+(chg>0?'up':chg<0?'dn':'nt');}
+  }
+  async function refresh(){
+    try{
+      const r=await fetch(API+'/indices',{signal:AbortSignal.timeout(6000)});
+      const d=await r.json();
+      for(const idx of (d.indices||[])){
+        const k=(idx.label||'').toLowerCase();
+        if(k==='nifty')setChip('nifty',idx.ltp,idx.change_pct,0);
+        if(k==='banknifty')setChip('banknifty',idx.ltp,idx.change_pct,0);
+        if(k==='vix')setChip('vix',idx.ltp,idx.change_pct,2);
+      }
+    }catch(e){/* backend offline → chips stay static */}
+    try{
+      const r=await fetch(API+'/signals?limit=1',{signal:AbortSignal.timeout(6000)});
+      const d=await r.json();
+      const n=d.count||(d.signals||[]).length;
+      if(n){$('lv-signals').textContent=n;$('lc-signals').textContent='computed live';
+        const h=$('hero-sig-count');if(h)h.textContent=n;}
+    }catch(e){}
+  }
+  refresh();setInterval(refresh,15000);
+})();
+</script>
+</body>
+</html>

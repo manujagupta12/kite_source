@@ -145,7 +145,6 @@ body{
     radial-gradient(ellipse 55% 40% at 88% 8%,rgba(167,139,250,.06),transparent 60%),
     radial-gradient(ellipse 60% 50% at 50% 110%,rgba(0,255,157,.045),transparent 60%),
     var(--bg);
-  background-attachment:fixed;
   color:var(--text);font-family:var(--body)}
 ::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--br2);border-radius:2px}
 .app{display:flex;width:100vw;height:100vh;height:100dvh;overflow:hidden;position:fixed;top:0;left:0}
@@ -354,8 +353,9 @@ body{
 
 /* ════════ NEON GLASS THEME LAYER — overrides only, structure untouched ════════ */
 
-/* Frosted chrome — nav surfaces get real glass blur */
-.sidebar,.topbar,.ticker-bar,.tabs,.mob-nav{background:rgba(9,16,30,.66);backdrop-filter:var(--glass);-webkit-backdrop-filter:var(--glass)}
+/* Chrome surfaces — translucent, NO blur (backdrop-filter over the animated
+   ticker forced continuous GPU re-blur and tanked frame rate) */
+.sidebar,.topbar,.ticker-bar,.tabs,.mob-nav{background:rgba(10,17,31,.94)}
 .sidebar{border-right:1px solid rgba(82,130,200,.12)}
 
 /* Animated logo shimmer */
@@ -401,9 +401,7 @@ body{
 .tab{position:relative}
 .tab.act::after{content:'';position:absolute;bottom:-1px;left:10%;right:10%;height:2px;background:var(--acc);box-shadow:0 0 8px var(--glow-acc);border-radius:2px}
 
-/* Live pulse rings */
-.pulse,.live-dot{box-shadow:0 0 0 0 var(--glow-grn);animation:pulseRing 2s cubic-bezier(.4,0,.6,1) infinite}
-@keyframes pulseRing{0%{box-shadow:0 0 0 0 var(--glow-grn);opacity:1}70%{box-shadow:0 0 0 6px transparent;opacity:.55}100%{box-shadow:0 0 0 0 transparent;opacity:1}}
+/* Live pulse — opacity only (animating box-shadow repaints every frame) */
 
 /* NEW SIGNAL FLASH — fires for every strategy card */
 @keyframes sigFlashUp{
@@ -420,7 +418,7 @@ body{
 .sig-flash-dn{animation:sigFlashDn 2.4s ease-out 2,cardIn .38s cubic-bezier(.21,.8,.35,1)}
 
 /* Toast glow-up */
-.sig-toast{backdrop-filter:var(--glass);-webkit-backdrop-filter:var(--glass);background:rgba(9,18,32,.85);box-shadow:0 8px 30px rgba(0,0,0,.5),0 0 24px rgba(0,255,157,.18)}
+.sig-toast{background:rgba(9,18,32,.96);box-shadow:0 8px 30px rgba(0,0,0,.5),0 0 24px rgba(0,255,157,.18)}
 
 /* PCR gauge fill — animated sheen */
 .pcr-bar-fill{position:relative;overflow:hidden}
@@ -443,11 +441,32 @@ body{
 .mover-row{transition:background .15s}
 .mover-row:hover{background:rgba(0,212,255,.04)}
 
+/* Crystal accents — login screen only (matches the 3D landing page) */
+.login-wrap{position:relative;overflow:hidden;perspective:900px}
+.login-wrap::before,.login-wrap::after{
+  content:'';position:absolute;pointer-events:none;
+  background:linear-gradient(160deg,rgba(0,212,255,.16),rgba(167,139,250,.07) 60%,transparent);
+  border:1px solid rgba(0,212,255,.22);
+  clip-path:polygon(50% 0%,100% 28%,82% 100%,18% 100%,0% 28%);
+  filter:drop-shadow(0 0 24px rgba(0,212,255,.18))}
+.login-wrap::before{width:340px;height:420px;left:6%;top:12%;
+  animation:crystalFloat 16s ease-in-out infinite}
+.login-wrap::after{width:200px;height:260px;right:8%;bottom:10%;
+  background:linear-gradient(200deg,rgba(0,255,157,.13),rgba(0,212,255,.05) 60%,transparent);
+  border-color:rgba(0,255,157,.2);
+  animation:crystalFloat 21s ease-in-out infinite reverse}
+@keyframes crystalFloat{
+  0%,100%{transform:rotate3d(1,1,0,8deg) translateY(0)}
+  50%{transform:rotate3d(1,-1,.2,-9deg) translateY(-22px)}}
+.login-card{position:relative;z-index:2;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  background:rgba(13,22,40,.78)}
+
 /* Accessibility — kill heavy motion if user prefers */
 @media(prefers-reduced-motion:reduce){
   .sig-card,.sig-flash-up,.sig-flash-dn{animation:none}
   .logo-t{animation:none}
   .pcr-bar-fill::after{animation:none}
+  .login-wrap::before,.login-wrap::after{animation:none}
 }
 `;
 
@@ -499,7 +518,9 @@ function SignalMiniChart({symbol,entryPrice,targetPrice,slPrice,direction,curren
   },[symbol,ivl]);
   if(loading)return(<div className="sig-chart-wrap" ref={ref}><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>Loading…</div></div>);
   if(!candles.length)return(<div className="sig-chart-wrap" ref={ref}><div style={{padding:"14px",textAlign:"center",fontSize:9,color:"var(--muted)"}}>No data</div></div>);
-  const data=candles.map(c=>({t:c.time.slice(11,16),price:c.close,open:c.open,high:c.high,low:c.low,close:c.close,range:[c.low,c.high]}));
+  // Cap rendered bars — full 1-min day is ~375 candles × many cards = SVG overload
+  const view=candles.length>80?candles.slice(-80):candles;
+  const data=view.map(c=>({t:c.time.slice(11,16),price:c.close,open:c.open,high:c.high,low:c.low,close:c.close,range:[c.low,c.high]}));
   const prices=data.map(d=>d.price);
   const isCandle=mode==="candle";
   const rawMin=isCandle?Math.min(...data.map(d=>d.low)):Math.min(...prices);
@@ -769,7 +790,7 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
         <div className="meta-box"><div className="meta-k">SL pts</div><div className="meta-v" style={{color:"var(--red)"}}>{sig.sl_pts||"—"}</div></div>
         <div className="meta-box"><div className="meta-k">VIX</div><div className="meta-v">{sig.vix||"—"}</div></div>
       </div>
-      <SignalMiniChart symbol={chartSymbol} entryPrice={entryPrice} targetPrice={targetPrice} slPrice={slPrice} direction={sig.direction}/>{sig.reason&&<div className="sig-reason">{sig.reason}</div>}
+      {sig.reason&&<div className="sig-reason">{sig.reason}</div>}
       <div className="sig-foot"><div className="sig-src">📡 {sig.source||"NSE"}</div>{isLiveSignal(sig)&&<span style={{fontSize:7,fontFamily:"var(--mono)",fontWeight:700,padding:"1px 5px",borderRadius:3,background:"rgba(0,255,157,.12)",color:"var(--grn)",border:"1px solid rgba(0,255,157,.25)"}}>● LIVE NSE</span>}<span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log</span><span className="log-trade-btn" style={{background:"rgba(255,61,90,.09)",borderColor:"rgba(255,61,90,.3)",color:"var(--red)"}} onClick={()=>onPlaceOrder&&onPlaceOrder(sig)}>⚡ Place</span></div>
     </div>);
   }
@@ -801,7 +822,7 @@ function SigCard({sig,pcrHistory,onLogTrade,onPlaceOrder,userPlan}){
       <div className="meta-box"><div className="meta-k">Lots</div><div className="meta-v">{sig.lots_suggested||"—"}</div></div>
       <div className="meta-box"><div className="meta-k">VIX</div><div className="meta-v">{sig.vix||"—"}</div></div>
     </div>
-    <SignalMiniChart symbol={chartSymbol} entryPrice={entryPrice} targetPrice={targetPrice} slPrice={slPrice} direction={sig.direction}/>{sig.reason&&<div className="sig-reason">{sig.reason}</div>}
+    {sig.reason&&<div className="sig-reason">{sig.reason}</div>}
     <div className="sig-foot"><div className="sig-src">📡 {sig.source||"Algo"}</div>{isLiveSignal(sig)&&<span style={{fontSize:7,fontFamily:"var(--mono)",fontWeight:700,padding:"1px 5px",borderRadius:3,background:"rgba(0,255,157,.12)",color:"var(--grn)",border:"1px solid rgba(0,255,157,.25)"}}>● LIVE NSE</span>}<span className={`risk-badge r${(sig.risk||"M")[0]}`}>{sig.risk||"MEDIUM"}</span><span className="log-trade-btn" onClick={()=>onLogTrade(sig)}>📝 Log</span><span className="log-trade-btn" style={{background:"rgba(255,61,90,.09)",borderColor:"rgba(255,61,90,.3)",color:"var(--red)"}} onClick={()=>onPlaceOrder&&onPlaceOrder(sig)}>⚡ Place</span></div>
   </div>);
 }
@@ -871,7 +892,7 @@ function SignalsTab({signals,market,strategy,indices,onClearStrategy,pcrHistory,
       <span>⏰</span><span>{isAfterMarketClose()?"MARKET CLOSED — signals shown are from today's session":"PRE-MARKET — live signals begin at 9:15 AM IST"}</span>
     </div>}{(market!=="ALL"||strategy)&&(<div className="filter-crumb">{market!=="ALL"&&<span style={{color:mktObj?.color||"var(--acc)"}}>{mktObj?.label||market}</span>}{market!=="ALL"&&strategy&&<span style={{color:"var(--dim)"}}>›</span>}{strategy&&<span style={{color:STRAT_INFO[skey(strategy)]?.color||"var(--acc)"}}>{strategy}</span>}<span style={{color:"var(--muted)",fontSize:9}}>&nbsp;— {filtered.length} signal{filtered.length!==1?"s":""}</span>{strategy&&<span className="filter-crumb-clear" onClick={onClearStrategy}>× Clear</span>}
       {expiredCount>0&&<span style={{cursor:"pointer",fontSize:8,color:showExpired?"var(--red)":"var(--dim)",fontFamily:"var(--mono)",marginLeft:"auto",padding:"1px 6px",borderRadius:4,border:"1px solid rgba(255,61,90,.2)",background:"rgba(255,61,90,.05)"}} onClick={()=>setShowExpired(v=>!v)}>{showExpired?`Hide ${expiredCount} expired`:`+${expiredCount} expired`}</span>}
-    </div>)}{filtered.length>0?(<div className="sigs-grid">{filtered.map((s,i)=><SigCard key={s.id||`${s.timestamp}-${i}`} sig={s} pcrHistory={pcrHistory} onLogTrade={onLogTrade} onPlaceOrder={onPlaceOrder} userPlan={userPlan}/>)}</div>):(<div className="empty">
+    </div>)}{filtered.length>0?(<div className="sigs-grid">{filtered.map((s,i)=><SigCard key={s.id||sigFingerprint(s)||i} sig={s} pcrHistory={pcrHistory} onLogTrade={onLogTrade} onPlaceOrder={onPlaceOrder} userPlan={userPlan}/>)}</div>):(<div className="empty">
   <div className="empty-ico">{isMarketOpen()?"📡":"🌙"}</div>
   <div className="empty-t">{isMarketOpen()?"Waiting for signals…":"Market is closed"}</div>
   <div className="empty-s" style={{marginBottom:8}}>{isMarketOpen()?`${market!=="ALL"?market+" · ":""}Backend refreshes every 5s`:isAfterMarketClose()?"Next session Mon–Fri at 9:15 AM IST":"Pre-market · Live signals start at 9:15 AM IST"}</div>
@@ -1786,12 +1807,24 @@ function App(){
   const [indicesMap,setIdxMap]=useState({});
   // ── Filter memory — persists across refreshes ─────────────────
   const [mkt,setMkt]=useState(()=>localStorage.getItem("at_mkt")||"ALL");
-  const [strat,setStrat]=useState(()=>localStorage.getItem("at_strat")||null);
+  const [strat,setStrat]=useState(()=>{
+    // Self-heal: a past bug persisted a stringified function here, which made
+    // the strategy filter match nothing (dashboard showed 0 signals forever)
+    const v=localStorage.getItem("at_strat");
+    if(v&&(v.includes("=>")||v.includes("function"))){localStorage.removeItem("at_strat");return null;}
+    return v||null;
+  });
   const [tab,setTab]=useState(()=>localStorage.getItem("at_tab")||"signals");
   const [openMkt,setOpenMkt]=useState(null);
   // Persist filter changes
   const setMktP  =v=>{setMkt(v);  localStorage.setItem("at_mkt",v);};
-  const setStratP=v=>{setStrat(v);v?localStorage.setItem("at_strat",v):localStorage.removeItem("at_strat");};
+  const setStratP=v=>{
+    // Accept both plain values and updater functions — resolve BEFORE persisting
+    // (previously an updater fn was stringified into localStorage → broken filter)
+    const next=typeof v==="function"?v(strat):v;
+    setStrat(next);
+    next?localStorage.setItem("at_strat",next):localStorage.removeItem("at_strat");
+  };
   const setTabP  =v=>{setTab(v);  localStorage.setItem("at_tab",v);};
   const [wsStatus,setWsSt]=useState("connecting");
   const [nseLive,setNseLive]=useState(false);const [dhanLive,setDhanLive]=useState(false);
