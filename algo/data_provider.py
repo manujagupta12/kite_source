@@ -47,17 +47,27 @@ except ImportError:
 
 # ── Configuration ─────────────────────────────────────────────
 DEFAULT_SYMBOL      = "BANKNIFTY"
-STRIKE_MIN          = 40000
+STRIKE_MIN          = 40000   # legacy default (BANKNIFTY) — use _STRIKE_RANGES below
 STRIKE_MAX          = 70000
+
+# Per-symbol strike ranges — CRITICAL: NIFTY trades ~20000-28000, BANKNIFTY ~45000-65000
+_STRIKE_RANGES = {
+    "NIFTY":       (18000, 30000),
+    "BANKNIFTY":   (40000, 72000),
+    "FINNIFTY":    (18000, 30000),
+    "MIDCPNIFTY":  (8000,  16000),
+    "SENSEX":      (70000, 90000),
+}
 
 # Near/far expiry index (0 = nearest, 1 = next)
 NEAR_EXPIRY_IDX     = 0
 FAR_EXPIRY_IDX      = 1
 
-# Cache of last fetched chain to avoid hammering NSE on every call
-_chain_cache: dict = {}
-_chain_cache_ts: float = 0
-_CACHE_TTL_SEC: float  = 15.0  # Refresh every 15s max — gentle on NSE anti-bot
+# Cache of last fetched chain — KEYED BY SYMBOL to avoid cross-contamination
+# Bug fix: old single-dict cache returned BANKNIFTY data for NIFTY requests
+_chain_cache: dict    = {}   # symbol -> chain_data dict
+_chain_cache_ts: dict = {}   # symbol -> float timestamp
+_CACHE_TTL_SEC: float = 15.0  # Refresh every 15s max — gentle on NSE anti-bot
 
 # Shared instances
 _fetcher: NSEFetcher   = None
@@ -102,11 +112,13 @@ def _get_chain(
     global _chain_cache, _chain_cache_ts
 
     now = time.time()
-    if now - _chain_cache_ts < _CACHE_TTL_SEC and _chain_cache:
-        return _chain_cache
+    # Symbol-aware cache — each instrument gets its own entry
+    if symbol in _chain_cache and now - _chain_cache_ts.get(symbol, 0) < _CACHE_TTL_SEC:
+        return _chain_cache[symbol]
+
+    stale = _chain_cache.get(symbol, {})   # keep stale for fallback returns
 
     # ── Primary: Dhan Data API (paid OC) or Market Feed (free) ──
-    # _dhan_chain() internally tries paid OC first, then falls to market feed
     if _dhan_available():
         expiries = _dhan_expiries(symbol)
         if expiries:
@@ -116,7 +128,7 @@ def _get_chain(
             far_result  = _dhan_chain(symbol, expiry=far_expiry)
             if near_result and near_result.get("chain"):
                 src = near_result.get("_src", "dhan")
-                _chain_cache = {
+                _chain_cache[symbol] = {
                     "near":         near_result.get("chain", {}),
                     "far":          far_result.get("chain",  {}),
                     "near_expiry":  near_expiry,
@@ -126,9 +138,9 @@ def _get_chain(
                     "timestamp":    near_result.get("timestamp", ""),
                     "_src":         src,
                 }
-                _chain_cache_ts = now
+                _chain_cache_ts[symbol] = now
                 print(f"[DataProvider] ✅ Chain from {src} — {symbol} spot={near_result.get('underlying')}")
-                return _chain_cache
+                return _chain_cache[symbol]
 
     # ── Secondary: Market Feed direct (in case dhan_data import path fails) ─
     if _mf_available and _mf_available():
@@ -138,12 +150,11 @@ def _get_chain(
             far_expiry  = expiries[far_idx]  if len(expiries) > far_idx  else expiries[-1]
             near_result = _mf_chain(symbol) if _mf_chain else {}
             if near_result and near_result.get("chain"):
-                # Filter far expiry
-                far_chain = {k: v for k, v in near_result.get("chain", {}).items()
-                             if v.get("expiry") == far_expiry}
+                far_chain  = {k: v for k, v in near_result.get("chain", {}).items()
+                              if v.get("expiry") == far_expiry}
                 near_chain = {k: v for k, v in near_result.get("chain", {}).items()
                               if v.get("expiry") == near_expiry}
-                _chain_cache = {
+                _chain_cache[symbol] = {
                     "near":         near_chain,
                     "far":          far_chain,
                     "near_expiry":  near_expiry,
@@ -153,15 +164,15 @@ def _get_chain(
                     "timestamp":    near_result.get("timestamp", ""),
                     "_src":         "dhan_mktfeed",
                 }
-                _chain_cache_ts = now
+                _chain_cache_ts[symbol] = now
                 print(f"[DataProvider] ✅ Chain from dhan_mktfeed — {symbol} spot={near_result.get('underlying')}")
-                return _chain_cache
+                return _chain_cache[symbol]
 
     # ── Fallback: NSE Direct API ─────────────────────────────────
     fetcher = _get_fetcher()
     expiries = fetcher.get_expiry_dates(symbol)
     if not expiries:
-        return _chain_cache  # return stale if available
+        return stale  # return stale if available
 
     near_expiry = expiries[near_idx] if len(expiries) > near_idx else expiries[0]
     far_expiry  = expiries[far_idx]  if len(expiries) > far_idx  else expiries[-1]
@@ -169,7 +180,7 @@ def _get_chain(
     near_result = fetcher.get_option_chain(symbol, expiry=near_expiry)
     far_result  = fetcher.get_option_chain(symbol, expiry=far_expiry)
 
-    _chain_cache = {
+    _chain_cache[symbol] = {
         "near":         near_result.get("chain", {}),
         "far":          far_result.get("chain",  {}),
         "near_expiry":  near_expiry,
@@ -179,8 +190,8 @@ def _get_chain(
         "timestamp":    near_result.get("timestamp", ""),
         "_src":         "nse",
     }
-    _chain_cache_ts = now
-    return _chain_cache
+    _chain_cache_ts[symbol] = now
+    return _chain_cache[symbol]
 
 
 # ── Public API — backward-compatible with multitrade_loader ───
@@ -239,9 +250,11 @@ def get_instruments(
             return None
 
         df = pd.DataFrame(rows)
+        # Use per-symbol strike range — CRITICAL for NIFTY (strikes ~20000-28000)
+        s_min, s_max = _STRIKE_RANGES.get(symbol, (STRIKE_MIN, STRIKE_MAX))
         df = df[
-            (df["STRIKE"] >= STRIKE_MIN) &
-            (df["STRIKE"] <= STRIKE_MAX)
+            (df["STRIKE"] >= s_min) &
+            (df["STRIKE"] <= s_max)
         ].copy().reset_index(drop=True)
 
         return df if not df.empty else None

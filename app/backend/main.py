@@ -722,70 +722,88 @@ def _run_all_strategies() -> list:
             score_momentum, score_strangle, score_expiry, score_ratio, detect_regime)
     except ImportError:
         return []
-    try:
-        df_raw = _loader.get_instruments("NIFTY")
-        if df_raw is None or df_raw.empty: return []
-        ce_raw = df_raw[df_raw["TYPE"]=="CE"].copy()
-        pe_raw = df_raw[df_raw["TYPE"]=="PE"].copy()
-        df = ce_raw.rename(columns={
-            "STRIKE":"near_strike","BID":"near_bid","ASK":"near_ask",
-            "LTP":"near_ltp","VOLUME":"near_vol",
-            "NEAR_THETA":"near_theta","FAR_THETA":"far_theta",
-            "NEAR_VEGA":"near_vega","FAR_VEGA":"far_vega",
-            "NEAR_DELTA":"near_delta","FAR_DELTA":"far_delta",
-            "FAR_LEG":"far_prem","NEAR_LEG":"near_prem",
-        })
-        df["far_strike"] = df["near_strike"]
-        # Real straddle = CE_ltp + PE_ltp (merge PE data on strike)
-        if not pe_raw.empty:
-            pe_ltp = pe_raw[["STRIKE","LTP","BID"]].rename(
-                columns={"STRIKE":"near_strike","LTP":"pe_ltp","BID":"pe_bid"})
-            df = df.merge(pe_ltp, on="near_strike", how="left")
-            df["straddle"] = df["near_ltp"].fillna(0) + df["pe_ltp"].fillna(0)
-        else:
-            df["straddle"] = df["near_ltp"].fillna(0) * 2  # fallback
-        spot = _latest_indices_map.get("NIFTY",{}).get("ltp",0)
-        vix  = _latest_indices_map.get("VIX",{}).get("ltp")
-        if not spot: return []
-        atm  = int(round(spot/50)*50)
-        near_exp = None
+
+    vix = _latest_indices_map.get("VIX", {}).get("ltp")
+    all_sigs = []
+
+    # Run all 7 strategies for BOTH NIFTY (50pt steps) and BANKNIFTY (100pt steps)
+    for inst_symbol, atm_step in [("NIFTY", 50), ("BANKNIFTY", 100)]:
         try:
-            from algo.nse_fetcher import get_fetcher
-            near_exp = get_fetcher().get_expiry_dates("NIFTY")[0]
-        except Exception: pass
-        all_r = []
-        for fn, args in [
-            (score_calendar,       (df,atm,vix)),
-            (score_iron_condor,    (df,atm,vix)),
-            (score_short_straddle, (df,atm,vix)),
-            (score_momentum,       (df,atm,vix,spot)),
-            (score_strangle,       (df,atm,vix)),
-            (score_expiry,         (df,atm,vix,near_exp)),
-            (score_ratio,          (df,atm,vix)),
-        ]:
-            try: all_r.extend(fn(*args) or [])
-            except Exception as e: logging.debug(f"[MultiStrat] {fn.__name__}: {e}")
-        sigs=[]
-        for r in sorted(all_r, key=lambda x:x.get("score",0), reverse=True)[:10]:
-            rationale = _strategy_why(r, vix, spot)
-            sigs.append({
-                "id":f"ms_{r['strategy'].replace(' ','_')}_{int(time.time())}",
-                "timestamp":datetime.now().isoformat(), "source":"NSE_LIVE", "market":"FO",
-                "strategy":r["strategy"], "instrument":r.get("inst","NIFTY"),
-                "direction":r.get("direction","WAIT"), "score":r.get("score",60),
-                "risk":"LOW" if r.get("score",0)>=80 else "MEDIUM",
-                "spot":spot, "vix":vix,
-                "near_strike":r.get("near_strike",r.get("strike",atm)),
-                "far_strike":r.get("far_strike",r.get("wing_ce",atm)),
-                "reason":r.get("reason",""), "orders":r.get("orders",""),
-                "risk_note":r.get("risk_note",""),
-                "action":r.get("orders","").split("\n")[0] if r.get("orders") else "",
-                "why_it_works": rationale,
+            df_raw = _loader.get_instruments(inst_symbol)
+            if df_raw is None or df_raw.empty:
+                logging.debug(f"[MultiStrat] {inst_symbol}: empty DataFrame — skipping")
+                continue
+            ce_raw = df_raw[df_raw["TYPE"] == "CE"].copy()
+            pe_raw = df_raw[df_raw["TYPE"] == "PE"].copy()
+            df = ce_raw.rename(columns={
+                "STRIKE": "near_strike", "BID": "near_bid", "ASK": "near_ask",
+                "LTP": "near_ltp", "VOLUME": "near_vol",
+                "NEAR_THETA": "near_theta", "FAR_THETA": "far_theta",
+                "NEAR_VEGA": "near_vega", "FAR_VEGA": "far_vega",
+                "NEAR_DELTA": "near_delta", "FAR_DELTA": "far_delta",
+                "FAR_LEG": "far_prem", "NEAR_LEG": "near_prem",
             })
-        return sigs
-    except Exception as e:
-        logging.debug(f"[MultiStrat] error: {e}")
-        return []
+            df["far_strike"] = df["near_strike"]
+            # Real straddle = CE_ltp + PE_ltp
+            if not pe_raw.empty:
+                pe_ltp = pe_raw[["STRIKE", "LTP", "BID"]].rename(
+                    columns={"STRIKE": "near_strike", "LTP": "pe_ltp", "BID": "pe_bid"})
+                df = df.merge(pe_ltp, on="near_strike", how="left")
+                df["straddle"] = df["near_ltp"].fillna(0) + df["pe_ltp"].fillna(0)
+            else:
+                df["straddle"] = df["near_ltp"].fillna(0) * 2
+            spot = _latest_indices_map.get(inst_symbol, {}).get("ltp", 0)
+            if not spot:
+                logging.debug(f"[MultiStrat] {inst_symbol}: no spot price — skipping")
+                continue
+            atm = int(round(spot / atm_step) * atm_step)
+            near_exp = None
+            try:
+                from algo.nse_fetcher import get_fetcher
+                near_exp = get_fetcher().get_expiry_dates(inst_symbol)[0]
+            except Exception:
+                pass
+            all_r = []
+            for fn, args in [
+                (score_calendar,       (df, atm, vix)),
+                (score_iron_condor,    (df, atm, vix)),
+                (score_short_straddle, (df, atm, vix)),
+                (score_momentum,       (df, atm, vix, spot)),
+                (score_strangle,       (df, atm, vix)),
+                (score_expiry,         (df, atm, vix, near_exp)),
+                (score_ratio,          (df, atm, vix)),
+            ]:
+                try:
+                    all_r.extend(fn(*args) or [])
+                except Exception as e:
+                    logging.debug(f"[MultiStrat] {inst_symbol} {fn.__name__}: {e}")
+
+            for r in sorted(all_r, key=lambda x: x.get("score", 0), reverse=True)[:8]:
+                rationale = _strategy_why(r, vix, spot)
+                all_sigs.append({
+                    "id": f"ms_{inst_symbol}_{r['strategy'].replace(' ','_')}_{int(time.time())}",
+                    "timestamp": datetime.now().isoformat(), "source": "NSE_LIVE", "market": "FO",
+                    "strategy": r["strategy"], "instrument": inst_symbol,
+                    "direction": r.get("direction", "WAIT"), "score": r.get("score", 60),
+                    "risk": "LOW" if r.get("score", 0) >= 80 else "MEDIUM",
+                    "spot": spot, "vix": vix,
+                    "near_strike": r.get("near_strike", r.get("strike", atm)),
+                    "far_strike":  r.get("far_strike",  r.get("wing_ce", atm)),
+                    "reason":    r.get("reason", ""), "orders": r.get("orders", ""),
+                    "risk_note": r.get("risk_note", ""),
+                    "action": r.get("orders", "").split("\n")[0] if r.get("orders") else "",
+                    "why_it_works": rationale,
+                })
+            logging.info(f"[MultiStrat] {inst_symbol}: {len(all_r)} raw → {min(len(all_r),8)} signals")
+        except Exception as e:
+            logging.warning(f"[MultiStrat] {inst_symbol} error: {e}")
+
+    if not all_sigs:
+        logging.debug("[MultiStrat] both NIFTY+BANKNIFTY returned no signals — trying connector fallback")
+        return _run_all_strategies_via_connector()
+
+    # Return top 16 across both instruments, sorted by score
+    return sorted(all_sigs, key=lambda x: x.get("score", 0), reverse=True)[:16]
 
 def _strategy_why(r:dict, vix, spot) -> str:
     s=r.get("strategy","").upper(); v=f"VIX={vix:.1f}" if vix else ""
@@ -1250,25 +1268,33 @@ async def signal_loop():
         # Equity signals — every 30s (10 cycles × 3s)
         if cycle % 10 == 0:
             # FIXED: executor — 25 sequential HTTP quotes were blocking the event loop ~30s+
-            eq = await asyncio.get_event_loop().run_in_executor(None, lambda: generate_equity_signals(top_n=6))
-            valid_eq = [s for s in eq if _validate_signal(s)]
-            for s in valid_eq:
-                s["is_live"] = True
-                _db["signals"].append(s)
-            if valid_eq:
-                _db["signals"] = _db["signals"][-300:]
-                await broadcaster.broadcast({"type": "equity_signals", "signals": valid_eq, "count": len(valid_eq)})
+            try:
+                eq = await asyncio.get_event_loop().run_in_executor(None, lambda: generate_equity_signals(top_n=6))
+                valid_eq = [s for s in (eq or []) if _validate_signal(s)]
+                for s in valid_eq:
+                    s["is_live"] = True
+                    _db["signals"].append(s)
+                if valid_eq:
+                    _db["signals"] = _db["signals"][-300:]
+                    await broadcaster.broadcast({"type": "equity_signals", "signals": valid_eq, "count": len(valid_eq)})
+            except Exception as _eq_err:
+                logging.warning(f"[EquitySignals] error (non-fatal): {_eq_err}")
 
-            # S2-S7 multi-strategy — same 30s cadence
-            ms_sigs = await asyncio.get_event_loop().run_in_executor(None, _run_all_strategies)
-            valid_ms = [s for s in ms_sigs if _validate_signal(s)]
-            for s in valid_ms:
-                s["is_live"] = True
-                _db["signals"].append(s)
-                await broadcaster.broadcast({"type": "signal", "data": s})
-            if valid_ms:
-                _db["signals"] = _db["signals"][-300:]
-                logging.info(f"[MultiStrat] {len(valid_ms)} validated signals")
+            # S2-S7 multi-strategy — same 30s cadence (isolated from equity errors)
+            try:
+                ms_sigs = await asyncio.get_event_loop().run_in_executor(None, _run_all_strategies)
+                valid_ms = [s for s in (ms_sigs or []) if _validate_signal(s)]
+                for s in valid_ms:
+                    s["is_live"] = True
+                    _db["signals"].append(s)
+                    await broadcaster.broadcast({"type": "signal", "data": s})
+                if valid_ms:
+                    _db["signals"] = _db["signals"][-300:]
+                    logging.info(f"[MultiStrat] {len(valid_ms)} validated signals added")
+                else:
+                    logging.debug(f"[MultiStrat] 0 validated signals this cycle")
+            except Exception as _ms_err:
+                logging.warning(f"[MultiStrat] error (non-fatal): {_ms_err}")
 
         # Gold (XAUUSD via Delta Exchange) — every 5 min (100 cycles × 3s), 24/7
         if time.time() - _gold_last_run >= 300:
@@ -1306,7 +1332,8 @@ async def signal_loop():
                 logging.debug(f"[MCX] signal run error: {_me}")
 
         # PCR Contrarian — every 90s (30 cycles × 3s)
-        if cycle % 30 == 0 and _PCR_OK:
+        # Run regardless of _PCR_OK — _pcr_signal_live() has its own fallbacks
+        if cycle % 30 == 0:
             vix = _latest_indices_map.get("VIX", {}).get("ltp")
             pcr_live = await asyncio.get_event_loop().run_in_executor(None, _pcr_signal_live, vix)
             valid_pcr = [s for s in pcr_live if _validate_signal(s)]
@@ -2333,6 +2360,92 @@ async def record_signal_outcome(data: dict):
         "recorded_at":    _ist_now().isoformat(),
     }
     return {"ok": True, "correct": correct, "move_pts": round(move, 2)}
+
+@app.get("/debug/multistrat")
+def debug_multistrat():
+    """Temporary debug endpoint — shows raw multistrategy output for diagnosis."""
+    import traceback
+    results = {"nse_ok": _NSE_OK, "loader": _loader is not None, "instruments": {}, "strategies": {}, "errors": []}
+    if not _NSE_OK or _loader is None:
+        results["errors"].append("NSE not OK or loader None")
+        return results
+    vix = _latest_indices_map.get("VIX", {}).get("ltp")
+    results["vix"] = vix
+    for inst_symbol, atm_step in [("NIFTY", 50), ("BANKNIFTY", 100)]:
+        entry = {"spot": None, "atm": None, "df_rows": 0, "ce_rows": 0, "pe_rows": 0, "strat_results": {}, "error": None}
+        try:
+            spot = _latest_indices_map.get(inst_symbol, {}).get("ltp", 0)
+            entry["spot"] = spot
+            if not spot:
+                entry["error"] = "no spot price"
+                results["instruments"][inst_symbol] = entry
+                continue
+            atm = int(round(spot / atm_step) * atm_step)
+            entry["atm"] = atm
+            df_raw = _loader.get_instruments(inst_symbol)
+            if df_raw is None or df_raw.empty:
+                entry["error"] = "empty DataFrame"
+                results["instruments"][inst_symbol] = entry
+                continue
+            entry["df_rows"] = len(df_raw)
+            ce_raw = df_raw[df_raw["TYPE"] == "CE"].copy()
+            pe_raw = df_raw[df_raw["TYPE"] == "PE"].copy()
+            entry["ce_rows"] = len(ce_raw)
+            entry["pe_rows"] = len(pe_raw)
+            entry["strikes_near_atm"] = sorted(ce_raw["STRIKE"].astype(int).unique().tolist())[:5]
+            df = ce_raw.rename(columns={
+                "STRIKE": "near_strike", "BID": "near_bid", "ASK": "near_ask",
+                "LTP": "near_ltp", "VOLUME": "near_vol",
+                "NEAR_THETA": "near_theta", "FAR_THETA": "far_theta",
+                "NEAR_VEGA": "near_vega", "FAR_VEGA": "far_vega",
+                "NEAR_DELTA": "near_delta", "FAR_DELTA": "far_delta",
+                "FAR_LEG": "far_prem", "NEAR_LEG": "near_prem",
+            })
+            df["far_strike"] = df["near_strike"]
+            if not pe_raw.empty:
+                pe_ltp = pe_raw[["STRIKE", "LTP", "BID"]].rename(
+                    columns={"STRIKE": "near_strike", "LTP": "pe_ltp", "BID": "pe_bid"})
+                df = df.merge(pe_ltp, on="near_strike", how="left")
+                df["straddle"] = df["near_ltp"].fillna(0) + df["pe_ltp"].fillna(0)
+            else:
+                df["straddle"] = df["near_ltp"].fillna(0) * 2
+            # Check ATM row
+            atm_row = df[df["near_strike"] == atm]
+            entry["atm_row_exists"] = not atm_row.empty
+            entry["has_atm_plus_100"] = not df[df["near_strike"] == atm + 100].empty
+            entry["has_atm_minus_100"] = not df[df["near_strike"] == atm - 100].empty
+            from algo.multistrategy import score_iron_condor, score_short_straddle, score_momentum, score_calendar
+            for fn_name, fn, args in [
+                ("score_calendar", score_calendar, (df, atm, vix)),
+                ("score_iron_condor", score_iron_condor, (df, atm, vix)),
+                ("score_short_straddle", score_short_straddle, (df, atm, vix)),
+                ("score_momentum", score_momentum, (df, atm, vix, spot)),
+            ]:
+                try:
+                    r = fn(*args) or []
+                    entry["strat_results"][fn_name] = {"count": len(r), "scores": [x.get("score") for x in r]}
+                except Exception as e:
+                    entry["strat_results"][fn_name] = {"error": str(e), "tb": traceback.format_exc()[-300:]}
+        except Exception as e:
+            entry["error"] = str(e)
+            entry["tb"] = traceback.format_exc()[-300:]
+        results["instruments"][inst_symbol] = entry
+
+    # Also run the full _run_all_strategies() to see what it actually returns
+    try:
+        import traceback as _tb
+        full_sigs = _run_all_strategies()
+        results["full_run"] = {
+            "count": len(full_sigs),
+            "strategies": [s.get("strategy") for s in full_sigs],
+            "scores": [s.get("score") for s in full_sigs],
+            "valid": [_validate_signal(s) for s in full_sigs],
+        }
+    except Exception as e:
+        results["full_run"] = {"error": str(e), "tb": _tb.format_exc()[-500:]}
+
+    return results
+
 
 @app.get("/signals/accuracy")
 def signal_accuracy():
