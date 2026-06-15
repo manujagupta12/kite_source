@@ -67,7 +67,7 @@ FAR_EXPIRY_IDX      = 1
 # Bug fix: old single-dict cache returned BANKNIFTY data for NIFTY requests
 _chain_cache: dict    = {}   # symbol -> chain_data dict
 _chain_cache_ts: dict = {}   # symbol -> float timestamp
-_CACHE_TTL_SEC: float = 15.0  # Refresh every 15s max — gentle on NSE anti-bot
+_CACHE_TTL_SEC: float = 60.0  # Signal generators read cache only — prefetch loop refreshes every 30s
 
 # Shared instances
 _fetcher: NSEFetcher   = None

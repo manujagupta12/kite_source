@@ -180,6 +180,19 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 _db: Dict[str, Any] = {"users": {}, "trades": {}, "signals": [], "regime": {}}
 _paper: Dict[str, Any] = {}
 
+# ── Loop diagnostics (in-memory, reset on restart) ────────────────────────
+_loop_diag: Dict[str, Any] = {
+    "cycle": 0,
+    "last_cycle10_at": None,
+    "equity_last_duration_s": None,
+    "equity_last_count": None,
+    "equity_last_error": None,
+    "multistrat_last_duration_s": None,
+    "multistrat_last_count": None,
+    "multistrat_last_valid": None,
+    "multistrat_last_error": None,
+}
+
 # ── Daily signal persistence ──────────────────────────────────────────────
 _DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1147,6 +1160,53 @@ def _tg_send(signal: dict) -> None:
     try: _get_tg_bot().send_signal(signal)
     except Exception as e: logging.debug(f"[Telegram] {e}")
 
+async def chain_prefetch_loop():
+    """
+    Background task: pre-warms the option chain cache so that
+    _nse_signal(), _run_all_strategies() never block waiting for NSE HTTP.
+    Uses exponential backoff when NSE is slow/rate-limiting to avoid hammering.
+    Normal cadence: 30s. After timeout: 120s backoff. After 3 consecutive
+    timeouts: 300s backoff (NSE rate-limit recovery window).
+    """
+    from algo.data_provider import _get_chain as _dp_get_chain
+    logging.info("[ChainPrefetch] Started — warming BANKNIFTY+NIFTY cache")
+    consecutive_failures = 0
+    while True:
+        # Backoff schedule: 0 fails=30s, 1-2 fails=120s, 3+ fails=300s
+        if consecutive_failures == 0:
+            sleep_secs = 30
+        elif consecutive_failures < 3:
+            sleep_secs = 120
+        else:
+            sleep_secs = 300
+            logging.warning(f"[ChainPrefetch] NSE rate-limited — backing off {sleep_secs}s")
+
+        await asyncio.sleep(sleep_secs)
+
+        if not _is_market_open():
+            consecutive_failures = 0
+            continue
+
+        cycle_ok = True
+        for sym in ("BANKNIFTY", "NIFTY"):
+            try:
+                await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, lambda s=sym: _dp_get_chain(s)),
+                    timeout=28.0
+                )
+                logging.info(f"[ChainPrefetch] {sym} cache refreshed")
+            except asyncio.TimeoutError:
+                logging.warning(f"[ChainPrefetch] {sym} timeout >28s — NSE slow")
+                cycle_ok = False
+            except Exception as _pe:
+                logging.debug(f"[ChainPrefetch] {sym} error: {_pe}")
+                cycle_ok = False
+
+        if cycle_ok:
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+
 async def signal_loop():
     """
     Live signal engine.
@@ -1177,6 +1237,7 @@ async def signal_loop():
         sleep_secs = 3 if market_open else 60
         await asyncio.sleep(sleep_secs)
         cycle += 1
+        _loop_diag["cycle"] = cycle
 
         if not market_open:
             # Outside market hours: broadcast status only, no new signals
@@ -1255,9 +1316,18 @@ async def signal_loop():
 
         # ── LIVE MARKET: generate real signals ───────────────────────────
 
-        # S1 Calendar Spread — every cycle (3s)
-        # FIXED: run in executor — blocking HTTP on the event loop froze /signals/* endpoints
-        fo_sig = await asyncio.get_event_loop().run_in_executor(None, _nse_signal)
+        # S1 Calendar Spread — every cycle (3s), 10s hard timeout
+        try:
+            fo_sig = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, _nse_signal),
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            fo_sig = None
+            logging.debug("[Calendar] NSE fetch timeout >10s — skipping cycle")
+        except Exception as _cs_err:
+            fo_sig = None
+            logging.debug(f"[Calendar] error: {_cs_err}")
         if fo_sig and _validate_signal(fo_sig):
             fo_sig["source"]   = "NSE_LIVE"
             fo_sig["is_live"]  = True
@@ -1265,36 +1335,71 @@ async def signal_loop():
             await broadcaster.broadcast({"type": "signal", "data": fo_sig})
             _tg_send(fo_sig)
 
-        # Equity signals — every 30s (10 cycles × 3s)
+        # Equity + S2-S7 multi-strategy — every 30s (10 cycles × 3s)
+        # Run CONCURRENTLY so slow equity (18-20s) doesn't block multistrat
         if cycle % 10 == 0:
-            # FIXED: executor — 25 sequential HTTP quotes were blocking the event loop ~30s+
-            try:
-                eq = await asyncio.get_event_loop().run_in_executor(None, lambda: generate_equity_signals(top_n=6))
-                valid_eq = [s for s in (eq or []) if _validate_signal(s)]
-                for s in valid_eq:
-                    s["is_live"] = True
-                    _db["signals"].append(s)
-                if valid_eq:
-                    _db["signals"] = _db["signals"][-300:]
-                    await broadcaster.broadcast({"type": "equity_signals", "signals": valid_eq, "count": len(valid_eq)})
-            except Exception as _eq_err:
-                logging.warning(f"[EquitySignals] error (non-fatal): {_eq_err}")
+            _loop_diag["last_cycle10_at"] = _ist_now().isoformat()
+            _t0_both = time.time()
 
-            # S2-S7 multi-strategy — same 30s cadence (isolated from equity errors)
-            try:
-                ms_sigs = await asyncio.get_event_loop().run_in_executor(None, _run_all_strategies)
-                valid_ms = [s for s in (ms_sigs or []) if _validate_signal(s)]
-                for s in valid_ms:
-                    s["is_live"] = True
-                    _db["signals"].append(s)
-                    await broadcaster.broadcast({"type": "signal", "data": s})
-                if valid_ms:
-                    _db["signals"] = _db["signals"][-300:]
-                    logging.info(f"[MultiStrat] {len(valid_ms)} validated signals added")
-                else:
-                    logging.debug(f"[MultiStrat] 0 validated signals this cycle")
-            except Exception as _ms_err:
-                logging.warning(f"[MultiStrat] error (non-fatal): {_ms_err}")
+            async def _run_equity_task():
+                _t0 = time.time()
+                try:
+                    eq = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(None, lambda: generate_equity_signals(top_n=6)),
+                        timeout=25.0
+                    )
+                    valid_eq = [s for s in (eq or []) if _validate_signal(s)]
+                    _loop_diag["equity_last_duration_s"] = round(time.time() - _t0, 1)
+                    _loop_diag["equity_last_count"] = len(valid_eq)
+                    _loop_diag["equity_last_error"] = None
+                    for s in valid_eq:
+                        s["is_live"] = True
+                        _db["signals"].append(s)
+                    if valid_eq:
+                        _db["signals"] = _db["signals"][-300:]
+                        await broadcaster.broadcast({"type": "equity_signals", "signals": valid_eq, "count": len(valid_eq)})
+                except asyncio.TimeoutError:
+                    _loop_diag["equity_last_duration_s"] = round(time.time() - _t0, 1)
+                    _loop_diag["equity_last_error"] = "TIMEOUT >25s"
+                    logging.warning(f"[EquitySignals] timeout after {_loop_diag['equity_last_duration_s']}s")
+                except Exception as _eq_err:
+                    _loop_diag["equity_last_duration_s"] = round(time.time() - _t0, 1)
+                    _loop_diag["equity_last_error"] = str(_eq_err)
+                    logging.warning(f"[EquitySignals] error: {_eq_err}")
+
+            async def _run_multistrat_task():
+                _t0 = time.time()
+                try:
+                    ms_sigs = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(None, _run_all_strategies),
+                        timeout=25.0
+                    )
+                    valid_ms = [s for s in (ms_sigs or []) if _validate_signal(s)]
+                    _loop_diag["multistrat_last_duration_s"] = round(time.time() - _t0, 1)
+                    _loop_diag["multistrat_last_count"] = len(ms_sigs or [])
+                    _loop_diag["multistrat_last_valid"] = len(valid_ms)
+                    _loop_diag["multistrat_last_error"] = None
+                    for s in valid_ms:
+                        s["is_live"] = True
+                        _db["signals"].append(s)
+                        await broadcaster.broadcast({"type": "signal", "data": s})
+                    if valid_ms:
+                        _db["signals"] = _db["signals"][-300:]
+                        logging.info(f"[MultiStrat] {len(valid_ms)} validated signals added")
+                    else:
+                        logging.warning(f"[MultiStrat] 0 valid — raw={len(ms_sigs or [])} from _run_all_strategies")
+                except asyncio.TimeoutError:
+                    _loop_diag["multistrat_last_duration_s"] = round(time.time() - _t0, 1)
+                    _loop_diag["multistrat_last_error"] = "TIMEOUT >25s"
+                    logging.warning(f"[MultiStrat] timeout after {_loop_diag['multistrat_last_duration_s']}s")
+                except Exception as _ms_err:
+                    _loop_diag["multistrat_last_duration_s"] = round(time.time() - _t0, 1)
+                    _loop_diag["multistrat_last_error"] = str(_ms_err)
+                    logging.warning(f"[MultiStrat] error: {_ms_err}")
+
+            # Fire both concurrently — total wall time = max(equity, multistrat) not sum
+            await asyncio.gather(_run_equity_task(), _run_multistrat_task())
+            logging.info(f"[Cycle{cycle}] equity+multistrat done in {round(time.time()-_t0_both,1)}s")
 
         # Gold (XAUUSD via Delta Exchange) — every 5 min (100 cycles × 3s), 24/7
         if time.time() - _gold_last_run >= 300:
@@ -1403,10 +1508,11 @@ async def lifespan(app:FastAPI):
         # BANKNIFTY spot + near/far CE/PE tokens (standard Dhan security_ids)
         start_dhan_ticker([260105, 260106])
         logging.info("[Dhan] WebSocket ticker started")
-    t1 = asyncio.create_task(_supervised(indices_loop, "IndicesLoop"))
-    t2 = asyncio.create_task(_supervised(signal_loop,  "SignalLoop"))
+    t1 = asyncio.create_task(_supervised(indices_loop,      "IndicesLoop"))
+    t2 = asyncio.create_task(_supervised(signal_loop,       "SignalLoop"))
+    t3 = asyncio.create_task(_supervised(chain_prefetch_loop, "ChainPrefetch"))
     yield
-    t1.cancel(); t2.cancel()
+    t1.cancel(); t2.cancel(); t3.cancel()
 
 app=FastAPI(title="AlgoTrade API",version="3.4.0",lifespan=lifespan)
 app.add_middleware(CORSMiddleware,
@@ -2360,6 +2466,11 @@ async def record_signal_outcome(data: dict):
         "recorded_at":    _ist_now().isoformat(),
     }
     return {"ok": True, "correct": correct, "move_pts": round(move, 2)}
+
+@app.get("/debug/loop")
+def debug_loop():
+    """Show signal loop diagnostics — cycle count, last cycle%10 run, equity/multistrat timings."""
+    return _loop_diag
 
 @app.get("/debug/multistrat")
 def debug_multistrat():
