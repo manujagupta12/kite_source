@@ -865,9 +865,10 @@ function BrokerTab({userPlan}){
   };
 
   const BROKERS=[
-    {id:"dhan",  name:"Dhan",  desc:"Your primary broker",        docsUrl:"https://web.dhan.co",        envKey:"DHAN_ACCESS_TOKEN", color:"#FF6B00"},
-    {id:"kite",  name:"Kite",  desc:"Zerodha Kite Connect",       docsUrl:"https://kite.trade/connect", envKey:"KITE_ACCESS_TOKEN", color:"#387ED1"},
-    {id:"paper", name:"Paper", desc:"Simulated — no real orders", docsUrl:null,                         envKey:null,                color:"#9E9E9E"},
+    {id:"dhan",   name:"Dhan",   desc:"Your primary broker",        docsUrl:"https://web.dhan.co",        envKey:"DHAN_ACCESS_TOKEN",   color:"#FF6B00"},
+    {id:"kite",   name:"Kite",   desc:"Zerodha Kite Connect",       docsUrl:"https://kite.trade/connect", envKey:"KITE_ACCESS_TOKEN",   color:"#387ED1"},
+    {id:"upstox", name:"Upstox", desc:"Upstox API v2",              docsUrl:"/api/broker/upstox-auth",    envKey:"UPSTOX_ACCESS_TOKEN", color:"#6C63FF"},
+    {id:"paper",  name:"Paper",  desc:"Simulated — no real orders", docsUrl:null,                         envKey:null,                  color:"#9E9E9E"},
   ];
 
   const active=status?.broker||"none";
@@ -924,9 +925,9 @@ function BrokerTab({userPlan}){
               onClick={()=>switchBroker(b.id)} disabled={!!switching}>
               {isSwitching?"Switching…":"Use this"}
             </button>}
-            {!isAvail&&b.docsUrl&&<a href={b.docsUrl} target="_blank" rel="noreferrer"
+            {!isAvail&&b.docsUrl&&<a href={b.docsUrl} target={b.id==="upstox"?"_self":"_blank"} rel="noreferrer"
               className="btn btn-ghost btn-sm" style={{fontSize:9,textDecoration:"none",flex:1,textAlign:"center",display:"block",padding:"5px 0"}}>
-              Get token →
+              {b.id==="upstox"?"Authenticate →":"Get token →"}
             </a>}
             {isActive&&<span style={{fontSize:9,color:b.color,fontFamily:"var(--mono)",padding:"5px 0"}}>✓ Using this</span>}
           </div>
@@ -938,10 +939,11 @@ function BrokerTab({userPlan}){
     <div style={{background:"var(--s1)",border:"1px solid var(--br)",borderRadius:10,padding:"14px 16px"}}>
       <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",fontWeight:700,marginBottom:10,letterSpacing:"1px"}}>SETUP GUIDE</div>
       {[
-        ["Dhan (recommended)", "Add DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN to .env → restart",      "#FF6B00"],
-        ["Zerodha Kite",       "Add KITE_API_KEY + KITE_ACCESS_TOKEN to .env → restart",           "#387ED1"],
-        ["Broker priority",    "Auto-selects: Dhan first, then Kite, then Paper",                   "#9E9E9E"],
-        ["Force broker",       "Set BROKER=dhan (or kite / paper) in .env",                         "#00d4ff"],
+        ["Dhan (recommended)", "Add DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN to .env → restart",                        "#FF6B00"],
+        ["Zerodha Kite",       "Add KITE_API_KEY + KITE_ACCESS_TOKEN to .env → restart",                          "#387ED1"],
+        ["Upstox",             "Token auto-loaded from data/upstox_token.json · Refresh daily via Authenticate →", "#6C63FF"],
+        ["Broker priority",    "Auto-selects: Dhan → Kite → Upstox → Paper",                                      "#9E9E9E"],
+        ["Force broker",       "Set BROKER=upstox (or dhan / kite / paper) in .env",                              "#00d4ff"],
       ].map(([k,v,c])=>(<div key={k} style={{display:"flex",gap:10,marginBottom:7,fontSize:10}}>
         <div style={{fontFamily:"var(--mono)",color:c,minWidth:130,fontSize:9,flexShrink:0,paddingTop:2}}>{k}</div>
         <div style={{color:"var(--muted)",lineHeight:1.5}}>{v}</div>

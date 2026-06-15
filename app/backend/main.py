@@ -8,6 +8,14 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
+
+# Load .env from repo root (or current dir) if present — never overrides real env vars
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env", override=False)
+    _load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=False)
+except ImportError:
+    pass
 from typing import Any, Dict, List, Optional
 
 import uvicorn
@@ -77,6 +85,26 @@ else:
             logging.warning(f"[Dhan] Token file read error: {_de}")
     else:
         logging.warning("[Dhan] No DHAN_ACCESS_TOKEN in env — running on NSE polling only")
+
+# ── Upstox token wiring ────────────────────────────────────────────────────
+# API key/secret come from .env (or environment). Access token is loaded from
+# data/upstox_token.json and refreshed daily via /broker/upstox-auth.
+_upstox_tf = Path(__file__).parent.parent.parent / "data" / "upstox_token.json"
+if not _upstox_tf.exists():
+    _upstox_tf = Path(__file__).parent / "data" / "upstox_token.json"
+if _upstox_tf.exists():
+    try:
+        import json as _json2
+        _ut = _json2.loads(_upstox_tf.read_text())
+        if not os.environ.get("UPSTOX_ACCESS_TOKEN") and _ut.get("access_token"):
+            os.environ["UPSTOX_ACCESS_TOKEN"] = _ut["access_token"]
+            logging.info("[Upstox] Token loaded from upstox_token.json")
+        if not os.environ.get("UPSTOX_API_KEY") and _ut.get("api_key"):
+            os.environ["UPSTOX_API_KEY"] = _ut["api_key"]
+        if not os.environ.get("UPSTOX_API_SECRET") and _ut.get("api_secret"):
+            os.environ["UPSTOX_API_SECRET"] = _ut["api_secret"]
+    except Exception as _ue:
+        logging.warning(f"[Upstox] Token file read error: {_ue}")
 
 try:
     from algo.dhan_ticker import start_dhan_ticker, is_running as _dhan_is_running
@@ -1549,9 +1577,12 @@ def broker_status(user=Depends(get_optional_user)):
     btype = b.__class__.__name__.replace("Broker", "").lower()
     return {
         "ok": b.is_ready, "broker": btype, "paper": btype == "paper",
-        "available": {"dhan": bool(os.environ.get("DHAN_ACCESS_TOKEN")),
-                      "kite": bool(os.environ.get("KITE_ACCESS_TOKEN"))},
-        "upstox_needs_auth": False,  # Upstox disabled
+        "available": {
+            "dhan":   bool(os.environ.get("DHAN_ACCESS_TOKEN")),
+            "kite":   bool(os.environ.get("KITE_ACCESS_TOKEN")),
+            "upstox": bool(os.environ.get("UPSTOX_ACCESS_TOKEN") and os.environ.get("UPSTOX_API_KEY")),
+        },
+        "upstox_needs_auth": bool(os.environ.get("UPSTOX_API_KEY") and not os.environ.get("UPSTOX_ACCESS_TOKEN"))
     }
 
 @app.get("/broker/funds")
@@ -1570,15 +1601,13 @@ def broker_orders_list(user=Depends(get_current_user)):
     return {"orders": _get_broker().get_orders()}
 
 @app.get("/broker/upstox-auth")
-def upstox_auth_redirect():  # Upstox disabled — not in use
-    raise HTTPException(410, "Upstox integration is not enabled on this platform")
-async def _upstox_auth_redirect_disabled():
+def upstox_auth_redirect():
     """Step 1: Open this URL in browser to authenticate Upstox."""
     if not _BROKER_OK:
         raise HTTPException(503, "broker.py not loaded")
     api_key = os.environ.get("UPSTOX_API_KEY", "")
     if not api_key:
-        raise HTTPException(400, "UPSTOX_API_KEY not set in .env")
+        raise HTTPException(400, "UPSTOX_API_KEY not set")
     from fastapi.responses import RedirectResponse
     url = _UpstoxBroker.get_auth_url()
     logging.info(f"[Upstox] Auth redirect → {url}")

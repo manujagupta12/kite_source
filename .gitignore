@@ -5,6 +5,7 @@
 .env.local
 .env.*.local
 data/dhan_token.json
+data/upstox_token.json
 
 # Python
 __pycache__/
