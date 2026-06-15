@@ -248,25 +248,25 @@ class PCRStrategy:
         if pcr < PCR_NEUTRAL_LOW:  # 0.60 < pcr < 0.85
             return {
                 "zone":      "BEARISH_WATCH",
-                "direction": "WATCH_SHORT",
-                "signal":    "APPROACHING OVERBOUGHT",
+                "direction": "SHORT",
+                "signal":    "APPROACHING OVERBOUGHT — WATCH SHORT",
                 "tag":       "WATCH",
                 "score":     45,
                 "reason":    (
-                    f"PCR_OI {pcr:.3f} in bearish watch zone. "
-                    f"Approaching overbought — monitor for breakdown below {PCR_OVERBOUGHT_THRESHOLD}."
+                    f"PCR_OI {pcr:.3f} in bearish watch zone (0.60–0.85). "
+                    f"Approaching overbought — building SHORT bias. Wait for PCR < {PCR_OVERBOUGHT_THRESHOLD} for full signal."
                 ),
             }
         else:  # 1.15 < pcr < 1.30
             return {
                 "zone":      "BULLISH_WATCH",
-                "direction": "WATCH_LONG",
-                "signal":    "APPROACHING OVERSOLD",
+                "direction": "LONG",
+                "signal":    "APPROACHING OVERSOLD — WATCH LONG",
                 "tag":       "WATCH",
                 "score":     45,
                 "reason":    (
-                    f"PCR_OI {pcr:.3f} in bullish watch zone. "
-                    f"Approaching oversold — monitor for breakout above {PCR_OVERSOLD_THRESHOLD}."
+                    f"PCR_OI {pcr:.3f} in bullish watch zone (1.15–1.30). "
+                    f"Approaching oversold — building LONG bias. Wait for PCR > {PCR_OVERSOLD_THRESHOLD} for full signal."
                 ),
             }
 
@@ -285,9 +285,9 @@ class PCRStrategy:
         pcr    = oi_data["pcr_oi"]
         interp = self._interpret(pcr, symbol)
 
-        # Skip neutral / watch zones
-        if interp["score"] < 50:
-            log.info(f"[PCR] {symbol} PCR={pcr} → {interp['zone']} — no signal")
+        # Skip only true neutral zone (score=0) — WATCH zones (score=45) now generate signals
+        if interp["score"] < 40:
+            log.info(f"[PCR] {symbol} PCR={pcr} → {interp['zone']} — neutral, no signal")
             return None
 
         # Max Pain alignment bonus

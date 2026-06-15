@@ -1,5 +1,5 @@
 @echo off
-title Push — Signal Loop Fix
+title Push — PCR Signal Fix
 color 0A
 cd /d "%~dp0"
 echo.
@@ -8,13 +8,19 @@ if exist ".git\index.lock" del /f ".git\index.lock"
 echo [GIT] Staging all changes...
 git add -A
 echo [GIT] Committing...
-git commit -m "fix: isolate equity and multistrategy errors in signal loop
+git commit -m "fix(pcr): include WATCH zone signals + /debug/pcr endpoint + timeout
 
-Wrap each strategy block in its own try/except so a transient
-equity-fetch error cannot crash the entire cycle % 10 block and
-starve S2-S7 signals. Also adds full_run section to debug endpoint.
-
-Strategies confirmed live: S2 Iron Condor, S3 Short Straddle, S4 Momentum."
+- pcr_strategy.py: lower score threshold 50->40 so WATCH zones
+  (PCR 0.60-0.85 and 1.15-1.30, score=45) generate signals.
+  Previously only extremes PCR<0.60 or >1.30 fired — WATCH zones
+  silently dropped. Now fires SHORT/LONG WATCH signals in between.
+- pcr_strategy.py: WATCH directions changed from WATCH_SHORT/WATCH_LONG
+  to SHORT/LONG with WATCH tag so dashboard renders them correctly.
+- main.py: add /debug/pcr endpoint — shows raw PCR values + zone for
+  NIFTY, BANKNIFTY, FINNIFTY even when no signal fires.
+- main.py: add asyncio.wait_for(timeout=30s) on PCR executor call in
+  signal_loop — previously no timeout, could hang 25s+ on NSE block.
+- main.py: _pcr_signal_from_oc() now includes WATCH zones as well."
 IF ERRORLEVEL 1 (
     echo [GIT] Nothing new to commit — pushing existing commits...
 )

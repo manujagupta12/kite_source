@@ -861,15 +861,23 @@ def _pcr_signal_from_oc(oc: dict, instrument: str, vix=None) -> dict:
     if not pcr or not spot:
         return None
     if pcr < 0.6:
-        zone = "OVERBOUGHT"; direction = "SHORT"; signal = "BEARISH"
+        zone = "OVERBOUGHT"; direction = "SHORT"; signal = "BEARISH REVERSAL EXPECTED"
         score = min(90, int(70 + (0.6 - pcr) * 50))
         reason = f"PCR {pcr:.3f} < 0.60 — greed zone, fade the crowd"
     elif pcr > 1.3:
-        zone = "OVERSOLD"; direction = "LONG"; signal = "BULLISH"
+        zone = "OVERSOLD"; direction = "LONG"; signal = "BULLISH REVERSAL EXPECTED"
         score = min(90, int(70 + (pcr - 1.3) * 30))
         reason = f"PCR {pcr:.3f} > 1.30 — fear zone, contrarian long"
+    elif 0.6 <= pcr < 0.85:
+        zone = "BEARISH_WATCH"; direction = "SHORT"; signal = "APPROACHING OVERBOUGHT — WATCH SHORT"
+        score = 45
+        reason = f"PCR {pcr:.3f} in bearish watch zone (0.60–0.85) — building SHORT bias"
+    elif 1.15 < pcr <= 1.3:
+        zone = "BULLISH_WATCH"; direction = "LONG"; signal = "APPROACHING OVERSOLD — WATCH LONG"
+        score = 45
+        reason = f"PCR {pcr:.3f} in bullish watch zone (1.15–1.30) — building LONG bias"
     else:
-        return None  # neutral, no signal
+        return None  # neutral 0.85-1.15, no signal
     return {
         "timestamp": datetime.now().isoformat(),
         "source": "nse_node_pcr", "market": "FO",
@@ -1440,7 +1448,17 @@ async def signal_loop():
         # Run regardless of _PCR_OK — _pcr_signal_live() has its own fallbacks
         if cycle % 30 == 0:
             vix = _latest_indices_map.get("VIX", {}).get("ltp")
-            pcr_live = await asyncio.get_event_loop().run_in_executor(None, _pcr_signal_live, vix)
+            try:
+                pcr_live = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, _pcr_signal_live, vix),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                pcr_live = []
+                logging.warning("[PCR] _pcr_signal_live timeout >30s — skipping cycle")
+            except Exception as _pcr_err:
+                pcr_live = []
+                logging.warning(f"[PCR] _pcr_signal_live error: {_pcr_err}")
             valid_pcr = [s for s in pcr_live if _validate_signal(s)]
             for ps in valid_pcr:
                 ps["is_live"] = True
@@ -2471,6 +2489,61 @@ async def record_signal_outcome(data: dict):
 def debug_loop():
     """Show signal loop diagnostics — cycle count, last cycle%10 run, equity/multistrat timings."""
     return _loop_diag
+
+@app.get("/debug/pcr")
+def debug_pcr():
+    """Show raw PCR values for NIFTY, BANKNIFTY, FINNIFTY — even when no signal fires (neutral zone).
+    Useful for diagnosing why S5 PCR CONTRARIAN shows 0 signals."""
+    from algo.pcr_strategy import NseOiFetcher, PCRStrategy, PCR_OVERBOUGHT_THRESHOLD, PCR_OVERSOLD_THRESHOLD, PCR_NEUTRAL_LOW, PCR_NEUTRAL_HIGH
+    try:
+        fetcher = NseOiFetcher()
+        results = []
+        for sym in ["NIFTY", "BANKNIFTY", "FINNIFTY"]:
+            try:
+                raw = fetcher.fetch_oi_pcr(sym)
+                if raw:
+                    pcr = raw.get("pcr_oi")
+                    if pcr is None:
+                        zone = "NO_DATA"
+                    elif pcr < PCR_OVERBOUGHT_THRESHOLD:
+                        zone = "OVERBOUGHT (signal fires)"
+                    elif pcr > PCR_OVERSOLD_THRESHOLD:
+                        zone = "OVERSOLD (signal fires)"
+                    elif PCR_NEUTRAL_LOW <= pcr <= PCR_NEUTRAL_HIGH:
+                        zone = "NEUTRAL (no signal)"
+                    elif pcr < PCR_NEUTRAL_LOW:
+                        zone = "BEARISH_WATCH (signal fires — score=45)"
+                    else:
+                        zone = "BULLISH_WATCH (signal fires — score=45)"
+                    results.append({
+                        "symbol": sym,
+                        "pcr_oi": pcr,
+                        "pcr_volume": raw.get("pcr_volume"),
+                        "spot": raw.get("spot"),
+                        "total_put_oi": raw.get("total_put_oi"),
+                        "total_call_oi": raw.get("total_call_oi"),
+                        "zone": zone,
+                        "source": raw.get("source"),
+                        "timestamp": raw.get("timestamp"),
+                    })
+                else:
+                    results.append({"symbol": sym, "error": "no data from NSE or Dhan fallback"})
+            except Exception as e:
+                results.append({"symbol": sym, "error": str(e)})
+        return {
+            "pcr_readings": results,
+            "thresholds": {
+                "overbought_short": PCR_OVERBOUGHT_THRESHOLD,
+                "oversold_long": PCR_OVERSOLD_THRESHOLD,
+                "neutral_low": PCR_NEUTRAL_LOW,
+                "neutral_high": PCR_NEUTRAL_HIGH,
+                "signal_score_min": 40,
+            },
+            "note": "Signals fire for score >= 40. OVERBOUGHT/OVERSOLD fire score 62+. WATCH zones fire score 45."
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 
 @app.get("/debug/multistrat")
 def debug_multistrat():
