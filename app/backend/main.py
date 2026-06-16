@@ -439,7 +439,20 @@ class TLTradeEnterRequest(BaseModel):
 class TLTradeCloseRequest(BaseModel):
     trade_index: int; exit_spread: float; notes: Optional[str] = ""
 
-LOT_SIZES = {"NIFTY": 25, "BANKNIFTY": 15, "FINNIFTY": 40}
+LOT_SIZES = {
+    # F&O indices
+    "NIFTY": 25, "BANKNIFTY": 15, "FINNIFTY": 40,
+    # MCX commodities (standard lot sizes per contract)
+    "GOLD": 10, "SILVER": 30, "CRUDEOIL": 100, "COPPER": 1000, "NATURALGAS": 1250,
+    # Equity — 1 share per unit (lots field = qty)
+    "EQUITY": 1,
+}
+# Approximate paper-trade margin per lot (INR) — MCX & equity
+_PAPER_MARGINS = {
+    "NIFTY": 80000, "BANKNIFTY": 90000, "FINNIFTY": 50000,
+    "GOLD": 55000, "SILVER": 45000, "CRUDEOIL": 35000,
+    "COPPER": 30000, "NATURALGAS": 20000,
+}
 _MOCK_REGIMES = ["R2 SIDEWAYS LOW", "R3 SIDEWAYS HIGH IV", "R4 TRENDING BULL", "R6 HIGH VOLATILITY"]
 _ROUND_ROBIN = ["NIFTY", "BANKNIFTY", "FINNIFTY"]
 _rr_idx = 0
@@ -1738,8 +1751,15 @@ def get_regime():
 
 @app.get("/signals/equity")
 def equity_signals(top:int=10,user=Depends(get_optional_user)):
+    # Serve from live-loop cache first — avoids hammering NSE on every frontend poll.
+    # The signal loop writes equity signals to _db["signals"] every 30s during market hours.
+    cached=[s for s in _db["signals"] if s.get("market")=="EQUITY"]
+    if cached:
+        return {"signals":list(reversed(cached[-top:])),"count":len(cached),
+                "timestamp":datetime.now().isoformat(),"source":"cache"}
+    # Cache empty (backend just started or market closed) — try on-demand generation
     signals=generate_equity_signals(top_n=top)
-    return {"signals":signals,"count":len(signals),"timestamp":datetime.now().isoformat()}
+    return {"signals":signals,"count":len(signals),"timestamp":datetime.now().isoformat(),"source":"live"}
 
 @app.get("/signals/gold")
 def gold_signals_endpoint(user=Depends(get_optional_user)):
@@ -1782,33 +1802,44 @@ def gold_ticker_endpoint():
 def commodity_signals_endpoint(instrument: str = None, user=Depends(get_optional_user)):
     """
     Live MCX commodity signals — GOLD, SILVER, CRUDEOIL, COPPER, NATURALGAS.
-    Data via Yahoo Finance futures; S1 TREND + S2 CALENDAR strategies.
+    Returns cached loop signals first; runs live Yahoo Finance generation to supplement.
     Optional ?instrument=GOLD to filter by instrument.
     """
-    if not _MCX_OK or _generate_mcx_signals is None:
-        return {"signals": [], "count": 0,
-                "message": "MCX module not loaded",
-                "timestamp": datetime.now().isoformat()}
-    try:
-        instruments = [instrument.upper()] if instrument else None
-        sigs  = _generate_mcx_signals(instruments)
-        prices = {}
-        if _get_mcx_prices:
-            try:
-                prices = _get_mcx_prices()
-            except Exception:
-                pass
-        return {
-            "signals":   sigs,
-            "count":     len(sigs),
-            "prices":    prices,
-            "mcx_live":  _MCX_OK,
-            "timestamp": datetime.now().isoformat(),
-            "source":    "yahoo_finance_futures",
-        }
-    except Exception as e:
-        return {"signals": [], "count": 0, "error": str(e),
-                "timestamp": datetime.now().isoformat()}
+    inst_upper = instrument.upper() if instrument else None
+
+    # ── Cached signals from the 5-min signal loop ─────────────────────────
+    cached = [s for s in _db["signals"] if s.get("market") == "COMMODITY"]
+    if inst_upper:
+        cached = [s for s in cached if s.get("instrument","").upper() == inst_upper]
+
+    # ── Live generation (Yahoo Finance, no rate-limit concerns) ───────────
+    live_sigs = []
+    if _MCX_OK and _generate_mcx_signals is not None:
+        try:
+            instruments = [inst_upper] if inst_upper else None
+            live_sigs = _generate_mcx_signals(instruments)
+        except Exception:
+            pass
+
+    # Merge: deduplicate by (instrument, strategy, direction)
+    def _mcx_key(s): return (s.get("instrument",""), s.get("strategy",""), s.get("direction",""))
+    seen_keys = {_mcx_key(s) for s in live_sigs}
+    merged = live_sigs + [s for s in cached if _mcx_key(s) not in seen_keys]
+    merged.sort(key=lambda s: s.get("timestamp",""), reverse=True)
+
+    prices = {}
+    if _get_mcx_prices:
+        try: prices = _get_mcx_prices()
+        except Exception: pass
+
+    return {
+        "signals":   merged,
+        "count":     len(merged),
+        "prices":    prices,
+        "mcx_live":  _MCX_OK,
+        "timestamp": datetime.now().isoformat(),
+        "source":    "cache+live",
+    }
 
 @app.get("/commodity/prices")
 def commodity_prices_endpoint():
@@ -2298,7 +2329,13 @@ def paper_account(user=Depends(get_current_user)):
 @app.post("/paper/trade")
 def paper_trade_enter(req:PaperTradeRequest,user=Depends(get_current_user)):
     import uuid; acc=_get_paper(user["email"])
-    margin={"NIFTY":80000,"BANKNIFTY":90000,"FINNIFTY":50000}.get(req.instrument,80000)*req.lots
+    # For equity: margin = entry_spread (price) × lots (qty); else use per-lot config
+    if req.instrument == "EQUITY" or req.instrument not in _PAPER_MARGINS:
+        # Equity or unknown: use entry price × qty as notional; require 20% margin
+        price = req.entry_spread or 1000
+        margin = int(price * req.lots * 0.20) or 5000
+    else:
+        margin = _PAPER_MARGINS.get(req.instrument, 80000) * req.lots
     if acc["balance"]<margin: raise HTTPException(400,"Insufficient paper capital")
     acc["balance"]-=margin
     trade={"id":str(uuid.uuid4())[:8].upper(),"date":str(date.today()),
@@ -2317,7 +2354,9 @@ def paper_trade_close(req:PaperCloseRequest,user=Depends(get_current_user)):
     trade=next((t for t in acc["trades"] if t["id"]==req.trade_id),None)
     if not trade: raise HTTPException(404,"Paper trade not found")
     if trade["status"]=="CLOSED": raise HTTPException(400,"Already closed")
-    ls=LOT_SIZES.get(trade["instrument"],25)
+    inst = trade.get("instrument","BANKNIFTY")
+    # Equity: lot_size=1 (lots field = share qty). MCX: use config. F&O: config or 25 default.
+    ls = 1 if inst == "EQUITY" else LOT_SIZES.get(inst, 25)
     pnl_pts=(req.exit_spread-trade["entry_spread"]) if trade["direction"] in ("LONG","BUY","BULL") else (trade["entry_spread"]-req.exit_spread)
     pnl_inr=round(pnl_pts*ls*trade["lots"],0)
     trade.update({"exit_time":datetime.now().isoformat(),"exit_spread":req.exit_spread,

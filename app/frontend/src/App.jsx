@@ -1620,7 +1620,110 @@ function SubscriptionTab({user}){
   </div>);
 }
 
-function PaperTab(){const [acc,setAcc]=useState(null);const [form,setForm]=useState({strategy:"S1 CALENDAR",instrument:"BANKNIFTY",direction:"LONG",lots:1,entry_spread:0,notes:""});const [closing,setClosing]=useState(null);const [exitSpread,setExitSpread]=useState(0);const [loading,setLoading]=useState(false);const [msg,setMsg]=useState("");const load=()=>api("/paper/account").then(setAcc).catch(()=>{});useEffect(()=>{load();},[]);const enter=async()=>{setLoading(true);setMsg("");try{const r=await api("/paper/trade",{method:"POST",body:JSON.stringify(form)});if(r.paper_trade){setMsg("✓ Entered: "+r.paper_trade.id);load();}else setMsg(r.detail||"Error");}catch(e){setMsg("Error: "+e.message);}finally{setLoading(false);}};const closeP=async(id)=>{setLoading(true);setMsg("");try{const r=await api("/paper/close",{method:"POST",body:JSON.stringify({trade_id:id,exit_spread:parseFloat(exitSpread)||0})});if(r.pnl_inr!==undefined){setMsg(`✓ P&L: ₹${r.pnl_inr.toLocaleString("en-IN")}`);setClosing(null);load();}else setMsg(r.detail||"Error");}catch(e){setMsg("Error: "+e.message);}finally{setLoading(false);}};const open=(acc?.trades||[]).filter(t=>t.status==="OPEN");const closed=(acc?.trades||[]).filter(t=>t.status==="CLOSED");const pnlCol=(acc?.total_pnl||0)>=0?"var(--grn)":"var(--red)";const msgGood=msg.startsWith("✓");return(<div><div style={{marginBottom:14,padding:"12px 14px",background:"var(--s1)",border:"1px solid rgba(245,197,24,.2)",borderRadius:10}}><div className="paper-bal-label">📄 PAPER TRADING</div><div style={{display:"flex",alignItems:"baseline",gap:18,marginTop:5,flexWrap:"wrap"}}>{[{lbl:"BALANCE",val:acc?fmtINR(acc.balance):"Loading…",col:"var(--yel)",sz:20},{lbl:"P&L",val:acc?fmtINR(acc.total_pnl):"—",col:pnlCol,sz:16},{lbl:"TRADES",val:acc?`${acc.open_count} open / ${acc.closed_count} closed`:"—",col:"var(--acc)",sz:13}].map((s,i)=>(<div key={i}><div style={{fontSize:8,color:"var(--muted)",marginBottom:2}}>{s.lbl}</div><div style={{fontFamily:"var(--mono)",fontSize:s.sz,fontWeight:700,color:s.col}}>{s.val}</div></div>))}</div></div><div className="paper-trade-form"><div className="paper-form-title">+ NEW PAPER TRADE</div>{msg&&<div style={{fontSize:11,padding:"6px 9px",borderRadius:6,marginBottom:9,background:msgGood?"rgba(0,255,157,.08)":"rgba(255,61,90,.08)",color:msgGood?"var(--grn)":"var(--red)",border:`1px solid ${msgGood?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`}}>{msg}</div>}<div className="form-row"><div className="form-field"><label className="form-lbl">Strategy</label><select className="form-sel" value={form.strategy} onChange={e=>setForm({...form,strategy:e.target.value})}>{["S1 CALENDAR","S2 IRON CONDOR","S3 SHORT STRADDLE","S4 0DTE SCALP","S5 PCR CONTRARIAN"].map(s=><option key={s}>{s}</option>)}</select></div><div className="form-field"><label className="form-lbl">Instrument</label><select className="form-sel" value={form.instrument} onChange={e=>setForm({...form,instrument:e.target.value})}>{["BANKNIFTY","NIFTY","FINNIFTY"].map(s=><option key={s}>{s}</option>)}</select></div></div><div className="form-row"><div className="form-field"><label className="form-lbl">Direction</label><select className="form-sel" value={form.direction} onChange={e=>setForm({...form,direction:e.target.value})}><option>LONG</option><option>SHORT</option></select></div><div className="form-field"><label className="form-lbl">Lots</label><input className="form-inp" type="number" min={1} max={50} value={form.lots} onChange={e=>setForm({...form,lots:parseInt(e.target.value)||1})}/></div></div><div className="form-row"><div className="form-field"><label className="form-lbl">Entry Spread (pts)</label><input className="form-inp" type="number" step="0.5" value={form.entry_spread} onChange={e=>setForm({...form,entry_spread:parseFloat(e.target.value)||0})}/></div><div className="form-field"><label className="form-lbl">Notes</label><input className="form-inp" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Optional…"/></div></div><button className="btn btn-primary" onClick={enter} disabled={loading} style={{width:"100%"}}>{loading?"Entering…":"Enter Paper Trade"}</button></div>{open.length>0&&<div className="card" style={{marginBottom:12}}><div className="card-lbl">Open</div>{open.map(t=>(<div key={t.id} style={{marginBottom:7}}><div className="paper-trade-row"><span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--acc)"}}>{t.id}</span><span style={{fontSize:10}}>{t.strategy?.slice(0,13)}</span><span style={{fontFamily:"var(--mono)",fontSize:10}}>{t.instrument} ×{t.lots}</span><span className="paper-status-open">PAPER</span><button className="btn btn-ghost" style={{fontSize:9,padding:"3px 9px"}} onClick={()=>setClosing(closing===t.id?null:t.id)}>Close</button></div>{closing===t.id&&<div style={{display:"flex",gap:7,padding:"7px 0 3px",alignItems:"center"}}><input className="form-inp" type="number" step="0.5" placeholder="Exit spread" style={{width:130}} value={exitSpread} onChange={e=>setExitSpread(e.target.value)}/><button className="btn btn-danger" style={{fontSize:10}} onClick={()=>closeP(t.id)} disabled={loading}>Confirm</button><button className="btn btn-ghost" style={{fontSize:10}} onClick={()=>setClosing(null)}>Cancel</button></div>}</div>))}</div>}{closed.length>0&&<div className="card"><div className="card-lbl">Closed</div>{closed.slice(-8).reverse().map(t=>(<div className="paper-trade-row" key={t.id}><span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--dim)"}}>{t.id}</span><span style={{fontSize:10}}>{t.instrument}</span><span style={{fontFamily:"var(--mono)",fontWeight:700,fontSize:10,color:(t.pnl_inr||0)>=0?"var(--grn)":"var(--red)"}}>{fmtINR(t.pnl_inr)}</span><span style={{fontFamily:"var(--mono)",fontSize:8,color:(t.pnl_pts||0)>=0?"var(--grn)":"var(--red)"}}>{t.pnl_pts!=null?`${t.pnl_pts>0?"+":""}${t.pnl_pts}pts`:""}</span><span className="paper-status-closed">CLOSED</span></div>))}</div>}</div>);}
+const _PAPER_MARKETS={
+  "F&O":   {instruments:["BANKNIFTY","NIFTY","FINNIFTY"],  strategies:["S1 CALENDAR","S2 IRON CONDOR","S3 SHORT STRADDLE","S4 0DTE SCALP","S5 PCR CONTRARIAN"], entryLabel:"Entry Spread (pts)", lotsLabel:"Lots"},
+  "MCX":   {instruments:["GOLD","SILVER","CRUDEOIL","COPPER","NATURALGAS"], strategies:["S1 MCX TREND","S2 MCX CALENDAR"], entryLabel:"Entry Price (USD)", lotsLabel:"Lots"},
+  "EQUITY":{instruments:["EQUITY"],                         strategies:["S6 EQUITY MOMENTUM","S7 EMA CROSSOVER"],           entryLabel:"Entry Price (₹)",     lotsLabel:"Qty (shares)"},
+};
+function PaperTab(){
+  const [acc,setAcc]=useState(null);
+  const [market,setMarket]=useState("F&O");
+  const [form,setForm]=useState({strategy:"S1 CALENDAR",instrument:"BANKNIFTY",direction:"LONG",lots:1,entry_spread:0,notes:""});
+  const [closing,setClosing]=useState(null);
+  const [exitSpread,setExitSpread]=useState(0);
+  const [loading,setLoading]=useState(false);
+  const [msg,setMsg]=useState("");
+  const load=()=>api("/paper/account").then(setAcc).catch(()=>{});
+  useEffect(()=>{load();},[]);
+  const mktCfg=_PAPER_MARKETS[market];
+  const switchMarket=m=>{
+    const cfg=_PAPER_MARKETS[m];
+    setMarket(m);
+    setForm(f=>({...f,instrument:cfg.instruments[0],strategy:cfg.strategies[0]}));
+  };
+  const enter=async()=>{setLoading(true);setMsg("");try{const r=await api("/paper/trade",{method:"POST",body:JSON.stringify(form)});if(r.paper_trade){setMsg("✓ Entered: "+r.paper_trade.id);load();}else setMsg(r.detail||"Error");}catch(e){setMsg("Error: "+e.message);}finally{setLoading(false);}};
+  const closeP=async(id)=>{setLoading(true);setMsg("");try{const r=await api("/paper/close",{method:"POST",body:JSON.stringify({trade_id:id,exit_spread:parseFloat(exitSpread)||0})});if(r.pnl_inr!==undefined){setMsg(`✓ P&L: ₹${r.pnl_inr.toLocaleString("en-IN")}`);setClosing(null);load();}else setMsg(r.detail||"Error");}catch(e){setMsg("Error: "+e.message);}finally{setLoading(false);}};
+  const open=(acc?.trades||[]).filter(t=>t.status==="OPEN");
+  const closed=(acc?.trades||[]).filter(t=>t.status==="CLOSED");
+  const pnlCol=(acc?.total_pnl||0)>=0?"var(--grn)":"var(--red)";
+  const msgGood=msg.startsWith("✓");
+  return(<div>
+    <div style={{marginBottom:14,padding:"12px 14px",background:"var(--s1)",border:"1px solid rgba(245,197,24,.2)",borderRadius:10}}>
+      <div className="paper-bal-label">📄 PAPER TRADING</div>
+      <div style={{display:"flex",alignItems:"baseline",gap:18,marginTop:5,flexWrap:"wrap"}}>
+        {[{lbl:"BALANCE",val:acc?fmtINR(acc.balance):"Loading…",col:"var(--yel)",sz:20},{lbl:"P&L",val:acc?fmtINR(acc.total_pnl):"—",col:pnlCol,sz:16},{lbl:"TRADES",val:acc?`${acc.open_count} open / ${acc.closed_count} closed`:"—",col:"var(--acc)",sz:13}].map((s,i)=>(
+          <div key={i}><div style={{fontSize:8,color:"var(--muted)",marginBottom:2}}>{s.lbl}</div><div style={{fontFamily:"var(--mono)",fontSize:s.sz,fontWeight:700,color:s.col}}>{s.val}</div></div>
+        ))}
+      </div>
+    </div>
+    <div className="paper-trade-form">
+      <div className="paper-form-title">+ NEW PAPER TRADE</div>
+      {/* Market type tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        {Object.keys(_PAPER_MARKETS).map(m=>(
+          <button key={m} className={`btn ${market===m?"btn-primary":"btn-ghost"}`} style={{fontSize:10,padding:"4px 12px"}} onClick={()=>switchMarket(m)}>{m}</button>
+        ))}
+      </div>
+      {msg&&<div style={{fontSize:11,padding:"6px 9px",borderRadius:6,marginBottom:9,background:msgGood?"rgba(0,255,157,.08)":"rgba(255,61,90,.08)",color:msgGood?"var(--grn)":"var(--red)",border:`1px solid ${msgGood?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`}}>{msg}</div>}
+      <div className="form-row">
+        <div className="form-field"><label className="form-lbl">Strategy</label>
+          <select className="form-sel" value={form.strategy} onChange={e=>setForm({...form,strategy:e.target.value})}>
+            {mktCfg.strategies.map(s=><option key={s}>{s}</option>)}
+          </select>
+        </div>
+        <div className="form-field"><label className="form-lbl">Instrument</label>
+          <select className="form-sel" value={form.instrument} onChange={e=>setForm({...form,instrument:e.target.value})}>
+            {mktCfg.instruments.map(s=><option key={s}>{s}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="form-row">
+        <div className="form-field"><label className="form-lbl">Direction</label>
+          <select className="form-sel" value={form.direction} onChange={e=>setForm({...form,direction:e.target.value})}>
+            <option>LONG</option><option>SHORT</option>
+          </select>
+        </div>
+        <div className="form-field"><label className="form-lbl">{mktCfg.lotsLabel}</label>
+          <input className="form-inp" type="number" min={1} max={market==="EQUITY"?10000:50} value={form.lots} onChange={e=>setForm({...form,lots:parseInt(e.target.value)||1})}/>
+        </div>
+      </div>
+      <div className="form-row">
+        <div className="form-field"><label className="form-lbl">{mktCfg.entryLabel}</label>
+          <input className="form-inp" type="number" step="0.5" value={form.entry_spread} onChange={e=>setForm({...form,entry_spread:parseFloat(e.target.value)||0})}/>
+        </div>
+        <div className="form-field"><label className="form-lbl">Notes</label>
+          <input className="form-inp" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Optional…"/>
+        </div>
+      </div>
+      <button className="btn btn-primary" onClick={enter} disabled={loading} style={{width:"100%"}}>{loading?"Entering…":"Enter Paper Trade"}</button>
+    </div>
+    {open.length>0&&<div className="card" style={{marginBottom:12}}><div className="card-lbl">Open</div>
+      {open.map(t=>(<div key={t.id} style={{marginBottom:7}}>
+        <div className="paper-trade-row">
+          <span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--acc)"}}>{t.id}</span>
+          <span style={{fontSize:10}}>{t.strategy?.slice(0,13)}</span>
+          <span style={{fontFamily:"var(--mono)",fontSize:10}}>{t.instrument} ×{t.lots}</span>
+          <span className="paper-status-open">PAPER</span>
+          <button className="btn btn-ghost" style={{fontSize:9,padding:"3px 9px"}} onClick={()=>setClosing(closing===t.id?null:t.id)}>Close</button>
+        </div>
+        {closing===t.id&&<div style={{display:"flex",gap:7,padding:"7px 0 3px",alignItems:"center"}}>
+          <input className="form-inp" type="number" step="0.5" placeholder="Exit price/spread" style={{width:140}} value={exitSpread} onChange={e=>setExitSpread(e.target.value)}/>
+          <button className="btn btn-danger" style={{fontSize:10}} onClick={()=>closeP(t.id)} disabled={loading}>Confirm</button>
+          <button className="btn btn-ghost" style={{fontSize:10}} onClick={()=>setClosing(null)}>Cancel</button>
+        </div>}
+      </div>))}
+    </div>}
+    {closed.length>0&&<div className="card"><div className="card-lbl">Closed</div>
+      {closed.slice(-8).reverse().map(t=>(<div className="paper-trade-row" key={t.id}>
+        <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--dim)"}}>{t.id}</span>
+        <span style={{fontSize:10}}>{t.instrument}</span>
+        <span style={{fontFamily:"var(--mono)",fontWeight:700,fontSize:10,color:(t.pnl_inr||0)>=0?"var(--grn)":"var(--red)"}}>{fmtINR(t.pnl_inr)}</span>
+        <span style={{fontFamily:"var(--mono)",fontSize:8,color:(t.pnl_pts||0)>=0?"var(--grn)":"var(--red)"}}>{t.pnl_pts!=null?`${t.pnl_pts>0?"+":""}${t.pnl_pts}pts`:""}</span>
+        <span className="paper-status-closed">CLOSED</span>
+      </div>))}
+    </div>}
+  </div>);
+}
 
 // ── Strategy Trust Panel ─────────────────────────────────────────────────────
 const TRUST_STRATEGIES=[
@@ -1904,6 +2007,15 @@ function App(){
   useEffect(()=>{
     if(!user)return;
     const iv=setInterval(()=>{api("/signals/equity?top=15").then(d=>{if(d.signals?.length)addSignals(d.signals);}).catch(()=>{});},45000);
+    return()=>clearInterval(iv);
+  },[user,addSignals]);
+
+  // MCX commodity signals — poll every 5 min (backend refreshes at same rate; signals only fire on EMA crossover)
+  useEffect(()=>{
+    if(!user)return;
+    const fetchCommodity=()=>api("/signals/commodity").then(d=>{if(d.signals?.length)addSignals(d.signals);}).catch(()=>{});
+    fetchCommodity(); // immediate fetch on load
+    const iv=setInterval(fetchCommodity,5*60*1000);
     return()=>clearInterval(iv);
   },[user,addSignals]);
 
