@@ -161,7 +161,7 @@ footer{border-top:1px solid var(--br);padding:46px 5vw;position:relative;z-index
     <a href="#strategies">Strategies</a>
     <a href="#how">How it works</a>
     <a href="#pricing">Pricing</a>
-    <a class="btn btn-ghost btn-sm" id="launch-nav" href="http://localhost:5173">Launch Dashboard</a>
+    <a class="btn btn-ghost btn-sm" href="/?signin=1&mode=signin">Sign In</a><a class="btn btn-primary btn-sm" style="margin-left:8px" href="/?signin=1">Get Started →</a>
   </div>
 </nav>
 
@@ -173,7 +173,7 @@ footer{border-top:1px solid var(--br);padding:46px 5vw;position:relative;z-index
     <p class="sub">BANKNIFTY &amp; NIFTY option strategies — Calendar Spread, Iron Condor, PCR Contrarian and
       Equity momentum — computed every 3 seconds from the real option chain, with full trade rationale on every signal.</p>
     <div class="hero-ctas">
-      <a class="btn btn-primary" id="launch-hero" href="http://localhost:5173">Launch Dashboard →</a>
+      <a class="btn btn-primary" id="launch-hero" href="/?signin=1">Launch Dashboard →</a>
       <a class="btn btn-ghost" href="#strategies">Explore Strategies</a>
     </div>
     <div class="live-strip" id="live-strip">
@@ -255,16 +255,16 @@ footer{border-top:1px solid var(--br);padding:46px 5vw;position:relative;z-index
     <div class="plans">
       <div class="plan"><h3>FREE</h3><div class="price">₹0</div><div class="per">forever</div>
         <ul><li>Dashboard access</li><li>Delayed signals</li><li>Paper trading</li><li class="na">Live real-time signals</li><li class="na">Trade logging</li></ul>
-        <a class="btn btn-ghost" style="width:100%" href="http://localhost:5173">Start Free</a></div>
+        <a class="btn btn-ghost" style="width:100%" href="/?signin=1">Start Free</a></div>
       <div class="plan"><h3>WEEKLY</h3><div class="price">₹500</div><div class="per">per week</div>
         <ul><li>Everything in Free</li><li>Live real-time signals</li><li>Trade logging</li><li>Signal history</li><li class="na">Priority support</li></ul>
-        <a class="btn btn-ghost" style="width:100%" href="http://localhost:5173">Choose Weekly</a></div>
+        <a class="btn btn-ghost" style="width:100%" href="/?signin=1">Choose Weekly</a></div>
       <div class="plan featured"><div class="badge">MOST POPULAR</div><h3>MONTHLY</h3><div class="price">₹1,500</div><div class="per">per month</div>
         <ul><li>Everything in Weekly</li><li>All 7 strategies</li><li>Accuracy tracker</li><li>Gold &amp; MCX signals</li><li>Priority support</li></ul>
-        <a class="btn btn-primary" style="width:100%" href="http://localhost:5173">Choose Monthly</a></div>
+        <a class="btn btn-primary" style="width:100%" href="/?signin=1">Choose Monthly</a></div>
       <div class="plan"><h3>ANNUAL</h3><div class="price">₹10,000</div><div class="per">per year — save 44%</div>
         <ul><li>Everything in Monthly</li><li>2 months equivalent free</li><li>Early feature access</li><li>Broker integration</li><li>Priority support</li></ul>
-        <a class="btn btn-ghost" style="width:100%" href="http://localhost:5173">Choose Annual</a></div>
+        <a class="btn btn-ghost" style="width:100%" href="/?signin=1">Choose Annual</a></div>
     </div>
   </section>
 
@@ -272,7 +272,7 @@ footer{border-top:1px solid var(--br);padding:46px 5vw;position:relative;z-index
   <div class="cta-final">
     <h2>See the market <span class="grad" style="background:linear-gradient(95deg,#00d4ff,#00ff9d);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent">crystallize</span>.</h2>
     <p>Live signals are computing right now. Paper-trade them free — no card required.</p>
-    <a class="btn btn-primary" style="font-size:16px;padding:15px 40px" href="http://localhost:5173">Launch Dashboard →</a>
+    <a class="btn btn-primary" style="font-size:16px;padding:15px 40px" href="/?signin=1">Launch Dashboard →</a>
   </div>
 </main>
 
@@ -282,7 +282,7 @@ footer{border-top:1px solid var(--br);padding:46px 5vw;position:relative;z-index
       <div class="logo" style="margin-bottom:12px">ALGOTRADE</div>
       <p>NSE F&amp;O signal platform. Real data, honest backtests, full trade rationale.</p>
     </div>
-    <div class="col"><h5>Platform</h5><a href="#strategies">Strategies</a><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="http://localhost:5173">Dashboard</a></div>
+    <div class="col"><h5>Platform</h5><a href="#strategies">Strategies</a><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="/?signin=1">Dashboard</a></div>
     <div class="col"><h5>Markets</h5><p>NIFTY 50 F&amp;O</p><p>BANK NIFTY</p><p>FIN NIFTY</p><p>Equity · Gold · MCX</p></div>
     <div class="col"><h5>Contact</h5><a href="mailto:guptamanuja3@gmail.com">guptamanuja3@gmail.com</a></div>
   </div>
@@ -443,7 +443,7 @@ footer{border-top:1px solid var(--br);padding:46px 5vw;position:relative;z-index
 /* ═══════════ Live data from backend (graceful fallback) ═══════════ */
 (function(){
   // Same-origin '/api' in production (nginx proxies it); localhost for dev
-  const API=location.hostname==='localhost'&&location.port!=='8000'
+  const API='/api';
     ?'http://localhost:8000':'/api';
   const $=id=>document.getElementById(id);
 

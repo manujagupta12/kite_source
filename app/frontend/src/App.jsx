@@ -9,6 +9,9 @@ import { API, WS } from "./config.js";
 // ── api() helper ────────────────────────────────────────────────────────────────────
 // API is "" → relative path (/api/...) proxied by Vite dev server or nginx
 // API is "https://..." → direct fetch to remote backend
+let _forceLogout = null;
+function setLogoutHandler(fn){ _forceLogout = fn; }
+
 function api(path, opts = {}) {
   const tok = localStorage.getItem("tok");
   const url = API ? API + path : "/api" + path;
@@ -18,7 +21,14 @@ function api(path, opts = {}) {
       ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
     },
     ...opts,
-  }).then(r => r.json());
+  }).then(r => {
+    if(r.status === 401){
+      localStorage.removeItem("tok");
+      if(_forceLogout) _forceLogout();
+      return {};
+    }
+    return r.json();
+  });
 }
 
 const MARKETS = [
@@ -1716,9 +1726,9 @@ function SubscriptionTab({user}){
 }
 
 const _PAPER_MARKETS={
-  "F&O":   {instruments:["BANKNIFTY","NIFTY","FINNIFTY"],  strategies:["S1 CALENDAR","S2 IRON CONDOR","S3 SHORT STRADDLE","S4 0DTE SCALP","S5 PCR CONTRARIAN"], entryLabel:"Entry Spread (pts)", lotsLabel:"Lots"},
-  "MCX":   {instruments:["GOLD","SILVER","CRUDEOIL","COPPER","NATURALGAS"], strategies:["S1 MCX TREND","S2 MCX CALENDAR"], entryLabel:"Entry Price (USD)", lotsLabel:"Lots"},
-  "EQUITY":{instruments:["EQUITY"],                         strategies:["S6 EQUITY MOMENTUM","S7 EMA CROSSOVER"],           entryLabel:"Entry Price (₹)",     lotsLabel:"Qty (shares)"},
+  "F&O":   {instruments:["BANKNIFTY","NIFTY","FINNIFTY"], strategies:["S1 CALENDAR","S2 IRON CONDOR","S3 SHORT STRADDLE","S4 0DTE SCALP","S5 PCR CONTRARIAN"], entryLabel:"Entry Spread (pts)", lotsLabel:"Lots", showSymbol:false},
+  "MCX":   {instruments:["GOLD","SILVER","CRUDEOIL","COPPER","NATURALGAS"], strategies:["S1 MCX TREND","S2 MCX CALENDAR"], entryLabel:"Entry Price (₹/unit)", lotsLabel:"Lots", showSymbol:false},
+  "EQUITY":{instruments:["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","WIPRO","LT","SBIN","BHARTIARTL","ITC","AXISBANK","KOTAKBANK","HINDUNILVR","BAJFINANCE","ASIANPAINT"], strategies:["S6 EQUITY MOMENTUM","S7 EMA CROSSOVER"], entryLabel:"Entry Price (₹/share)", lotsLabel:"Qty (shares)", showSymbol:false},
 };
 function PaperTab(){
   const [acc,setAcc]=useState(null);
@@ -2296,7 +2306,11 @@ function OnboardingModal({user,onDone}){
 
 // ── Login / Landing Page ─────────────────────────────────────────────────────
 function Login({onLogin}){
-  const [mode,setMode]=useState("signin"); // signin | signup
+  const [mode,setMode]=useState(()=>{
+    const hint=sessionStorage.getItem("at_login_mode")||"signin";
+    sessionStorage.removeItem("at_login_mode");
+    return hint;
+  }); // signin | signup
   const [email,setEmail]=useState("");
   const [password,setPassword]=useState("");
   const [name,setName]=useState("");
@@ -2426,6 +2440,11 @@ function Login({onLogin}){
       {/* Right — auth panel */}
       <div className="landing-right">
         <div className="auth-card">
+          <a href="/landing.html" style={{fontSize:11,color:"var(--dim)",textDecoration:"none",display:"inline-flex",alignItems:"center",gap:5,marginBottom:18,transition:"color .12s"}}
+            onMouseOver={e=>e.currentTarget.style.color="var(--acc)"}
+            onMouseOut={e=>e.currentTarget.style.color="var(--dim)"}>
+            ← Back to home
+          </a>
           <div className="auth-brand">ALGOTRADE</div>
           <div className="auth-tagline">NSE F&O Signal Platform · Real Data Only</div>
 
@@ -2494,13 +2513,14 @@ function Login({onLogin}){
 
 function App(){
   const [user,setUser]=useState(()=>{
-    // Handle OAuth redirect-back: /?token=xxx&oauth=1
+    // Handle OAuth redirect-back: /?token=xxx
     const params=new URLSearchParams(window.location.search);
     const oauthTok=params.get("token");
+    const signinFlag=params.get("signin");
+    const modeFlag=params.get("mode");
     const authErr=params.get("auth_error");
     if(oauthTok){
       localStorage.setItem("tok",oauthTok);
-      // Clean URL without reload
       window.history.replaceState({},"",window.location.pathname);
       return {tok:true};
     }
@@ -2508,7 +2528,20 @@ function App(){
       console.warn("[AlgoTrade] OAuth error:",authErr);
       window.history.replaceState({},"",window.location.pathname);
     }
-    return localStorage.getItem("tok")?{tok:true}:null;
+    if(localStorage.getItem("tok")) return {tok:true};
+    if(signinFlag){
+      if(modeFlag) sessionStorage.setItem("at_login_mode", modeFlag);
+      window.history.replaceState({},"",window.location.pathname);
+      return null;
+    }
+    // First-visit redirect to landing page
+    const visited=sessionStorage.getItem("at_landing_seen");
+    if(!visited){
+      sessionStorage.setItem("at_landing_seen","1");
+      window.location.href="/landing.html";
+      return null;
+    }
+    return null;
   });
   const [signals,setSigs]=useState([]);const [regime,setRegime]=useState(null);
   const [indicesMap,setIdxMap]=useState({});
@@ -2543,6 +2576,12 @@ function App(){
   const wsRef=useRef(null);
   const IDX_ORDER=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP","IT"];
   const indices=IDX_ORDER.map(l=>indicesMap[l]).filter(Boolean);
+
+  // Wire 401 interceptor → force logout
+  useEffect(()=>{
+    setLogoutHandler(()=>setUser(null));
+    return ()=>setLogoutHandler(null);
+  },[]);
 
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),100);return()=>clearInterval(t);},[]);
 
@@ -2867,6 +2906,20 @@ function AuditPanel() {
           }>Force NSE Reconnect</button>
         </div>
       )}
+
+      {/* Signal Maintenance */}
+      <div className="card" style={{marginTop:12}}>
+        <div className="card-lbl">Signal Maintenance</div>
+        <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>
+          Purge signals from previous trading days. Today's signals are never affected.
+        </div>
+        <button className="btn btn-ghost" style={{fontSize:10}} onClick={() =>
+          api("/signals/clear",{method:"POST"}).then(r=>{
+            if(r.purged!=null) alert(`Cleared ${r.purged} old signal(s).`);
+            refresh();
+          })
+        }>🗑 Clear Old Signals Now</button>
+      </div>
     </div>
   );
 }

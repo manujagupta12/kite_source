@@ -1252,6 +1252,8 @@ async def signal_loop():
         "message": "AlgoTrade signal engine started" if _is_market_open() else "Market closed — signals will resume at 9:15 AM IST",
     })
 
+    _last_purge_date: str = ""  # track which date we last purged signals for
+
     while True:
         market_open = _is_market_open()
         # Fast loop during market hours, slow outside
@@ -1259,6 +1261,18 @@ async def signal_loop():
         await asyncio.sleep(sleep_secs)
         cycle += 1
         _loop_diag["cycle"] = cycle
+
+        # ── Daily signal purge — clear yesterday's data at market open ────────
+        today_str = _ist_now().strftime("%Y-%m-%d")
+        if market_open and _last_purge_date != today_str:
+            old_count = len(_db["signals"])
+            # Remove signals NOT from today
+            _db["signals"] = [s for s in _db["signals"]
+                              if (s.get("timestamp","")[:10] == today_str)]
+            purged = old_count - len(_db["signals"])
+            if purged:
+                logging.info(f"[SignalLoop] Purged {purged} signals from previous day(s)")
+            _last_purge_date = today_str
 
         if not market_open:
             # Outside market hours: broadcast status only, no new signals
@@ -1732,6 +1746,15 @@ def get_margin(user=Depends(get_current_user)):
     }
 
 # ── Signals ───────────────────────────────────────────────────────────────
+
+@app.post("/signals/clear")
+def signals_clear(user=Depends(get_current_user)):
+    """Clear all in-memory signals (stale data purge). Frontend calls this on demand."""
+    count = len(_db["signals"])
+    today = _ist_now().strftime("%Y-%m-%d")
+    _db["signals"] = [s for s in _db["signals"] if s.get("timestamp","")[:10] == today]
+    removed = count - len(_db["signals"])
+    return {"ok": True, "removed": removed, "remaining": len(_db["signals"]), "kept_today": today}
 
 @app.get("/signals/health")
 def signals_health():
@@ -2489,11 +2512,14 @@ def paper_account(user=Depends(get_current_user)):
 @app.post("/paper/trade")
 def paper_trade_enter(req:PaperTradeRequest,user=Depends(get_current_user)):
     import uuid; acc=_get_paper(user["email"])
-    # For equity: margin = entry_spread (price) × lots (qty); else use per-lot config
-    if req.instrument == "EQUITY" or req.instrument not in _PAPER_MARGINS:
-        # Equity or unknown: use entry price × qty as notional; require 20% margin
+    # Equity instruments: any symbol not in margins dict → price-based margin
+    _MCX = {"GOLD","SILVER","CRUDEOIL","COPPER","NATURALGAS"}
+    _FO  = {"NIFTY","BANKNIFTY","FINNIFTY"}
+    is_equity = req.instrument not in _MCX and req.instrument not in _FO
+    if is_equity:
+        # Equity: entry_spread = share price, lots = qty; margin = 20% of notional
         price = req.entry_spread or 1000
-        margin = int(price * req.lots * 0.20) or 5000
+        margin = max(5000, int(price * req.lots * 0.20))
     else:
         margin = _PAPER_MARGINS.get(req.instrument, 80000) * req.lots
     if acc["balance"]<margin: raise HTTPException(400,"Insufficient paper capital")
@@ -2515,8 +2541,10 @@ def paper_trade_close(req:PaperCloseRequest,user=Depends(get_current_user)):
     if not trade: raise HTTPException(404,"Paper trade not found")
     if trade["status"]=="CLOSED": raise HTTPException(400,"Already closed")
     inst = trade.get("instrument","BANKNIFTY")
-    # Equity: lot_size=1 (lots field = share qty). MCX: use config. F&O: config or 25 default.
-    ls = 1 if inst == "EQUITY" else LOT_SIZES.get(inst, 25)
+    _MCX_SET = {"GOLD","SILVER","CRUDEOIL","COPPER","NATURALGAS"}
+    _FO_SET  = {"NIFTY","BANKNIFTY","FINNIFTY"}
+    # Equity (any non-MCX, non-FO instrument): lot_size=1, lots=qty
+    ls = LOT_SIZES.get(inst, 1) if (inst in _MCX_SET or inst in _FO_SET) else 1
     pnl_pts=(req.exit_spread-trade["entry_spread"]) if trade["direction"] in ("LONG","BUY","BULL") else (trade["entry_spread"]-req.exit_spread)
     pnl_inr=round(pnl_pts*ls*trade["lots"],0)
     trade.update({"exit_time":datetime.now().isoformat(),"exit_spread":req.exit_spread,
@@ -3278,12 +3306,18 @@ def upstox_callback(code: str = ""):
     token = _UpstoxBroker.exchange_code(code)
     if not token:
         raise HTTPException(500, "Token exchange failed — check UPSTOX_API_SECRET in .env")
+    # Persist to .env so token survives backend restarts
+    try:
+        _write_env_vars({"UPSTOX_ACCESS_TOKEN": token})
+    except Exception as _e:
+        logging.warning(f"[Upstox] Could not write token to .env: {_e}")
     from fastapi.responses import HTMLResponse
     return HTMLResponse("""
     <html><body style="font-family:monospace;background:#050c18;color:#00d4ff;padding:40px;text-align:center">
     <h2>✅ Upstox Connected!</h2>
-    <p>Token saved. You can close this window and return to AlgoTrade.</p>
+    <p>Token saved to .env and active immediately.</p>
     <p style="color:#00ff9d;font-size:20px">Upstox broker is now active.</p>
+    <script>setTimeout(()=>window.close(),3000)</script>
     </body></html>""")
 
 @app.post("/broker/place")
@@ -3500,7 +3534,18 @@ def broker_token_health():
         results["dhan"] = {"label": "Dhan", "has_token": False, "expired": False}
 
     # ── Upstox ────────────────────────────────────────────────────────────
+    # Check env first, then fall back to saved token file
     upstox_tok = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
+    if not upstox_tok:
+        try:
+            _tf = Path(__file__).parent.parent.parent / "data" / "upstox_token.json"
+            if _tf.exists():
+                _td = json.loads(_tf.read_text())
+                upstox_tok = _td.get("access_token", "").strip()
+                if upstox_tok:
+                    os.environ["UPSTOX_ACCESS_TOKEN"] = upstox_tok  # hot-load
+        except Exception:
+            pass
     if upstox_tok:
         exp = _jwt_exp(upstox_tok)
         expired = (exp > 0 and now > exp)
@@ -3513,7 +3558,11 @@ def broker_token_health():
             "save_endpoint": "/broker/credentials/upstox",
         }
     else:
-        results["upstox"] = {"label": "Upstox", "has_token": False, "expired": False}
+        results["upstox"] = {
+            "label": "Upstox", "has_token": False, "expired": False,
+            "hint": "Visit /api/broker/upstox-auth to authenticate",
+            "auth_url": "/api/broker/upstox-auth",
+        }
 
     # ── Delta Exchange ─────────────────────────────────────────────────────
     # Delta uses API key + secret (not expiring JWT) — only flag if missing
@@ -3685,30 +3734,8 @@ def _read_dotenv_raw() -> dict:
     return out
 
 def _write_dotenv(updates: dict) -> None:
-    """Merge updates into .env file, preserving comments and ordering."""
-    existing_lines = _ENV_PATH.read_text(encoding="utf-8").splitlines() if _ENV_PATH.exists() else []
-    written_keys = set()
-    new_lines = []
-    for line in existing_lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            new_lines.append(line); continue
-        if "=" not in stripped:
-            new_lines.append(line); continue
-        k = stripped.split("=", 1)[0].strip()
-        if k in updates:
-            new_lines.append(f"{k}={updates[k]}")
-            written_keys.add(k)
-        else:
-            new_lines.append(line)
-    # Append any new keys not already in the file
-    for k, v in updates.items():
-        if k not in written_keys:
-            new_lines.append(f"{k}={v}")
-    _ENV_PATH.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-    # Immediately update os.environ so restart isn't needed
-    for k, v in updates.items():
-        os.environ[k] = v
+    """Delegate to existing _write_env_vars (single implementation)."""
+    _write_env_vars(updates)
 
 class ConfigSaveRequest(BaseModel):
     updates: Dict[str, str]
