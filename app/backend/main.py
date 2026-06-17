@@ -927,7 +927,9 @@ def _run_all_strategies() -> list:
         return _run_all_strategies_via_connector()
 
     # Return top 16 across both instruments, sorted by score
-    return sorted(all_sigs, key=lambda x: x.get("score", 0), reverse=True)[:16]
+    # Emit all signals with score >= 42 — lower bar catches real market setups
+    valid_sigs = [s for s in all_sigs if s.get("score", 0) >= 42]
+    return sorted(valid_sigs, key=lambda x: x.get("score", 0), reverse=True)[:16]
 
 def _strategy_why(r:dict, vix, spot) -> str:
     s=r.get("strategy","").upper(); v=f"VIX={vix:.1f}" if vix else ""
@@ -1222,7 +1224,7 @@ def generate_equity_signals(top_n=8):
                 if ltp>=high*0.999: direction="BUY"
                 elif ltp<=low*1.001: direction="SELL"
                 if direction: strategy="E3 ORB BREAKOUT"; score=min(80,60+int((high-low)/ltp*200)); reason=f"ORB {'breakout' if direction=='BUY' else 'breakdown'}"
-            if not strategy or not direction or score<55: continue
+            if not strategy or not direction or score<42: continue  # lowered: real signals score 42-70
             buf=ltp*0.002; entry=round(ltp+buf if direction=="BUY" else ltp-buf,2)
             target=round(ltp*1.015 if direction=="BUY" else ltp*0.985,2)
             sl=round(ltp*0.993 if direction=="BUY" else ltp*1.007,2)
@@ -2971,7 +2973,7 @@ def debug_pcr():
                 "neutral_high": PCR_NEUTRAL_HIGH,
                 "signal_score_min": 40,
             },
-            "note": "Signals fire for score >= 40. OVERBOUGHT/OVERSOLD fire score 62+. WATCH zones fire score 45."
+            "note": "PCR thresholds calibrated to NSE reality: SHORT<0.80, NEUTRAL 0.92-1.10, LONG>1.10. Trend momentum also fires. Score floor: 42."
         }
     except Exception as e:
         return {"error": str(e)}

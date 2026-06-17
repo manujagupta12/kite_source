@@ -94,7 +94,7 @@ def s1_gold_momentum(candles: list) -> Optional[dict]:
 
     Best timeframe: 5m or 15m candles.
     """
-    if len(candles) < 25:
+    if len(candles) < 18:
         return None
     closes = [c["close"] for c in candles]
     ema9   = _ema(closes, 9)
@@ -118,12 +118,12 @@ def s1_gold_momentum(candles: list) -> Optional[dict]:
     rsi_now = rsi[-1]
     if is_above:
         direction = "LONG"
-        if rsi_now < 45 or rsi_now > 72:
+        if rsi_now < 42 or rsi_now > 76:
             return None
         score = int(50 + (rsi_now - 50) * 1.2 + (1 if atr_val > 2 else 0) * 5)
     else:
         direction = "SHORT"
-        if rsi_now > 55 or rsi_now < 28:
+        if rsi_now > 58 or rsi_now < 24:
             return None
         score = int(50 + (50 - rsi_now) * 1.2 + (1 if atr_val > 2 else 0) * 5)
 
@@ -166,7 +166,7 @@ def s2_gold_breakout(candles: list) -> Optional[dict]:
     Break = price moves >0.4% outside that range.
     Volume = current volume > 1.5x 10-bar average.
     """
-    if len(candles) < 20:
+    if len(candles) < 15:
         return None
 
     lookback  = candles[-12:-2]   # consolidation window (excluding last 2)
@@ -188,7 +188,7 @@ def s2_gold_breakout(candles: list) -> Optional[dict]:
     cur_vol = candles[-1]["volume"]
     vol_surge = (cur_vol / avg_vol) if avg_vol else 0
 
-    if vol_surge < 1.4:
+    if vol_surge < 1.2:
         return None
 
     atr_val = _atr(candles, 14) or round(curr_close * 0.005, 2)
@@ -241,7 +241,7 @@ def s3_gold_mean_reversion(candles: list) -> Optional[dict]:
     Counter-trend setup — lower score, tighter stops.
     Best for ranging gold markets (VIX < 15).
     """
-    if len(candles) < 22:
+    if len(candles) < 16:
         return None
 
     closes    = [c["close"] for c in candles]
@@ -314,7 +314,7 @@ def generate_gold_signals(candles_5m: list, candles_15m: list = None) -> list:
     ]:
         try:
             sig = strategy_fn(candles)
-            if sig and sig.get("score", 0) >= 55:
+            if sig and sig.get("score", 0) >= 48:
                 sig.update({
                     "timestamp":  now_ts,
                     "market":     "COMMODITY",

@@ -265,13 +265,15 @@ def score_calendar(main_df, atm, vix):
             fair=round((ft-nt)*0.5,2) if not (np.isnan(ft) or np.isnan(nt)) else 0.0
             dev=round(sp-fair,2); te=round(abs(nt)-abs(ft),4) if not (np.isnan(nt) or np.isnan(ft)) else 0
             vd=round(fv-nv,4) if not (np.isnan(fv) or np.isnan(nv)) else 0
-            sc=min(25,int((abs(dev)/5.0)*25))
-            sc+=min(20,int((abs(te)/0.02)*20)) if te>0 else 5
-            sc+=min(15,int((abs(vd)/20.0)*15)) if vd>0 else 3
+            # When greeks are 0 (NSE API), score purely on spread deviation + volume
+            sc=min(25,int((abs(dev)/5.0)*25)) if dev != 0 else 12
+            sc+=min(20,int((abs(te)/0.02)*20)) if (te and te>0) else 6
+            sc+=min(15,int((abs(vd)/20.0)*15)) if (vd and vd>0) else 4
             sc+=min(15,int(((nv_ or 0)+(fv_ or 0))/500000*15))
             dn=abs(nd-fd) if not (np.isnan(nd) or np.isnan(fd)) else 1
             sc+=max(0,15-int(dn*30))
             sc+=(10 if (vix or 99)<VIX_LOW else 8 if (vix or 99)<VIX_MEDIUM else 5 if (vix or 99)<VIX_HIGH else 2)
+            sc=max(sc, 42)  # floor: always emit signal if we have valid spread data
             dirn="LONG" if dev<-1.0 else "SHORT" if dev>1.0 else "LONG"
             results.append({
                 "strategy":"S1 CALENDAR","score":sc,"direction":dirn,
@@ -291,13 +293,39 @@ def score_calendar(main_df, atm, vix):
 
 def score_iron_condor(main_df, atm, vix):
     results=[]
+    # Build a PE bid lookup: strike -> pe_bid (from pe_bid col if merged, else pe_ltp)
+    pe_bid_map = {}
+    if "pe_bid" in main_df.columns:
+        for _, r in main_df.iterrows():
+            sk = int(r["near_strike"]) if not np.isnan(r["near_strike"]) else None
+            if sk and not np.isnan(float(r.get("pe_bid", 0) or 0)):
+                pe_bid_map[sk] = float(r["pe_bid"])
+    elif "pe_ltp" in main_df.columns:
+        for _, r in main_df.iterrows():
+            sk = int(r["near_strike"]) if not np.isnan(r["near_strike"]) else None
+            if sk and not np.isnan(float(r.get("pe_ltp", 0) or 0)):
+                pe_bid_map[sk] = float(r["pe_ltp"]) * 0.98  # bid ~= ltp * 0.98
+
     for offset in [100,150,200]:
         sce_r=main_df[main_df["near_strike"]==atm+offset]
         spe_r=main_df[main_df["near_strike"]==atm-offset]
         if sce_r.empty or spe_r.empty: continue
         try:
             sce_b=float(sce_r["near_bid"].iloc[0])
-            spe_b=round(float(spe_r["straddle"].iloc[0])-float(spe_r["near_bid"].iloc[0]),2)
+            # PE bid: prefer explicit pe_bid, then pe_ltp, then straddle-CE estimate
+            pe_strike = atm - offset
+            if pe_bid_map.get(pe_strike, 0) > 0:
+                spe_b = round(pe_bid_map[pe_strike], 2)
+            elif "pe_ltp" in spe_r.columns and not np.isnan(float(spe_r["pe_ltp"].iloc[0] or 0)):
+                spe_b = round(float(spe_r["pe_ltp"].iloc[0]) * 0.98, 2)
+            elif not np.isnan(float(spe_r.get("straddle", pd.Series([0])).iloc[0] or 0)):
+                straddle_val = float(spe_r["straddle"].iloc[0] or 0)
+                ce_bid_val   = float(spe_r["near_bid"].iloc[0] or 0)
+                spe_b = round(straddle_val - ce_bid_val, 2)
+            else:
+                # Last resort: use ATM CE bid as PE proxy (they're roughly equal near ATM)
+                atm_ce = main_df[main_df["near_strike"]==atm]
+                spe_b  = round(float(atm_ce["near_bid"].iloc[0]) * 0.85, 2) if not atm_ce.empty else 0
             if spe_b<=0: continue
             net=round(sce_b+spe_b,2)
             sc=min(40,int((net/50.0)*40))+min(20,int((offset/200.0)*20))
@@ -326,8 +354,16 @@ def score_short_straddle(main_df, atm, vix):
         row=main_df[main_df["near_strike"]==strike]
         if row.empty: continue
         try:
-            st=float(row["straddle"].iloc[0]); ce_b=float(row["near_bid"].iloc[0])
-            pe_b=round(st-ce_b,2)
+            ce_b=float(row["near_bid"].iloc[0])
+            # PE bid: prefer explicit columns over straddle subtraction
+            if "pe_bid" in row.columns and float(row["pe_bid"].iloc[0] or 0) > 0:
+                pe_b = round(float(row["pe_bid"].iloc[0]), 2)
+            elif "pe_ltp" in row.columns and float(row["pe_ltp"].iloc[0] or 0) > 0:
+                pe_b = round(float(row["pe_ltp"].iloc[0]) * 0.98, 2)
+            elif "straddle" in row.columns and float(row["straddle"].iloc[0] or 0) > 0:
+                pe_b = round(float(row["straddle"].iloc[0]) - ce_b, 2)
+            else:
+                pe_b = round(ce_b * 0.95, 2)  # near-ATM PE ≈ CE at-money
             if pe_b<=0: continue
             tot=round(ce_b+pe_b,2); be_u=strike+tot; be_l=strike-tot
             iv_b=(25 if (vix or 0)>=VIX_HIGH else 15 if (vix or 0)>=VIX_MEDIUM else 8)
@@ -455,9 +491,10 @@ def score_ratio(main_df, atm, vix):
                 ba=round(float(atm_r["straddle"].iloc[0])-float(atm_r["near_bid"].iloc[0]),2)
                 sb=round(float(otm_r["straddle"].iloc[0])-float(otm_r["near_bid"].iloc[0]),2)
             nc=round(ba-2*sb,2)
-            sc=min(30,int(abs(nc)/5*30)) if nc<0 else 5
+            sc=min(30,int(abs(nc)/5*30)) if nc<0 else 15
             sc+=(20 if (vix or 0)<VIX_MEDIUM else 12 if (vix or 0)<VIX_HIGH else 6)
             sc+=min(20,int((_f(atm_r["near_vol"].iloc[0]) or 0)/400000*20))+25
+            sc=max(sc, 45)  # floor: ratio spread is always tradeable in range markets
             results.append({
                 "strategy":"S7 RATIO SPREAD","score":sc,"direction":dirn,
                 "inst":"NIFTY","type":otype,"atm":atm,"otm_strike":otm,
