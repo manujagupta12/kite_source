@@ -28,8 +28,8 @@ nsepython==0.0.955
 # ── Optional: Dhan WebSocket — free with Dhan account ─────────
 # dhanhq==2.0.2
 
-# ── Optional: Razorpay — payment gateway ──────────────────────
-# razorpay==1.4.2
+# ── Razorpay — payment gateway ────────────────────────────────
+razorpay==1.4.2
 
 # ── Optional: Zerodha Kite Connect ────────────────────────────
 # kiteconnect==5.0.1

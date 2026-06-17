@@ -3,7 +3,7 @@ ALGOTRADE BACKEND  —  app/backend/main.py
 v3.3.0 — XLS removed, NSE Direct API wired, nse_live flag live
 """
 
-import asyncio, csv, hashlib, json, logging, os, random, sys, time
+import asyncio, csv, hashlib, json, logging, os, random, sys, time, urllib.parse
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from io import StringIO
@@ -1570,6 +1570,166 @@ def login(req:LoginRequest):
 @app.get("/auth/me")
 def me(user=Depends(get_current_user)):
     return {k:v for k,v in user.items() if k!="password"}
+
+# ── Social OAuth stubs (Google / Microsoft / Apple) ───────────────────────
+# These redirect to the provider's OAuth page. Configure client IDs in .env:
+#   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+#   MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET
+#   APPLE_CLIENT_ID, APPLE_CLIENT_SECRET
+# Callback URLs must be registered at each provider:
+#   https://yourdomain.com/api/auth/google/callback  etc.
+
+@app.get("/auth/google")
+def auth_google():
+    from fastapi.responses import RedirectResponse
+    client_id = os.environ.get("GOOGLE_CLIENT_ID","")
+    if not client_id:
+        raise HTTPException(503,"GOOGLE_CLIENT_ID not configured. Add to .env and restart backend.")
+    redirect_uri = os.environ.get("OAUTH_REDIRECT_BASE","http://localhost:8000") + "/api/auth/google/callback"
+    url = (f"https://accounts.google.com/o/oauth2/v2/auth"
+           f"?client_id={client_id}&redirect_uri={redirect_uri}"
+           f"&response_type=code&scope=openid%20email%20profile&access_type=offline&prompt=select_account")
+    return RedirectResponse(url)
+
+@app.get("/auth/google/callback")
+def auth_google_callback(code:str="", error:str=""):
+    from fastapi.responses import RedirectResponse
+    import urllib.parse, httpx as _hx
+    if error or not code:
+        return RedirectResponse("/?auth_error=" + urllib.parse.quote(error or "access_denied"))
+    client_id     = os.environ.get("GOOGLE_CLIENT_ID","")
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET","")
+    redirect_uri  = os.environ.get("OAUTH_REDIRECT_BASE","http://localhost:8000") + "/api/auth/google/callback"
+    try:
+        # Exchange code for tokens
+        r = _hx.post("https://oauth2.googleapis.com/token", data={
+            "code":code,"client_id":client_id,"client_secret":client_secret,
+            "redirect_uri":redirect_uri,"grant_type":"authorization_code"}, timeout=10)
+        r.raise_for_status()
+        id_token = r.json().get("id_token","")
+        # Decode payload (no verification — only for non-security-critical profile fetch)
+        import base64 as _b64, json as _json
+        parts = id_token.split(".")
+        pad = "=" * (-len(parts[1]) % 4)
+        profile = _json.loads(_b64.urlsafe_b64decode(parts[1]+pad))
+        email = profile.get("email","")
+        name  = profile.get("name","OAuth User")
+        if not email:
+            return RedirectResponse("/?auth_error=no_email")
+        # Upsert user
+        if email not in _db["users"]:
+            _db["users"][email] = {"name":name,"email":email,"password":"__oauth__",
+                "plan":"free","billing":"monthly","joined":str(date.today()),
+                "daily_target":50000,"plan_expiry":None,"oauth":"google"}
+        token = create_token({"sub":email})
+        return RedirectResponse(f"/?token={token}&oauth=1")
+    except Exception as ex:
+        return RedirectResponse("/?auth_error=" + urllib.parse.quote(str(ex))[:100])
+
+@app.get("/auth/microsoft")
+def auth_microsoft():
+    from fastapi.responses import RedirectResponse
+    client_id = os.environ.get("MICROSOFT_CLIENT_ID","")
+    if not client_id:
+        raise HTTPException(503,"MICROSOFT_CLIENT_ID not configured. Add to .env and restart backend.")
+    redirect_uri = os.environ.get("OAUTH_REDIRECT_BASE","http://localhost:8000") + "/api/auth/microsoft/callback"
+    url = (f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+           f"?client_id={client_id}&redirect_uri={urllib.parse.quote(redirect_uri)}"
+           f"&response_type=code&scope=openid%20email%20profile&prompt=select_account")
+    return RedirectResponse(url)
+
+@app.get("/auth/microsoft/callback")
+def auth_microsoft_callback(code:str="", error:str=""):
+    from fastapi.responses import RedirectResponse
+    import urllib.parse, httpx as _hx
+    if error or not code:
+        return RedirectResponse("/?auth_error=" + urllib.parse.quote(error or "access_denied"))
+    client_id     = os.environ.get("MICROSOFT_CLIENT_ID","")
+    client_secret = os.environ.get("MICROSOFT_CLIENT_SECRET","")
+    redirect_uri  = os.environ.get("OAUTH_REDIRECT_BASE","http://localhost:8000") + "/api/auth/microsoft/callback"
+    try:
+        r = _hx.post(f"https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
+            "code":code,"client_id":client_id,"client_secret":client_secret,
+            "redirect_uri":redirect_uri,"grant_type":"authorization_code",
+            "scope":"openid email profile"}, timeout=10)
+        r.raise_for_status()
+        tokens = r.json()
+        id_token = tokens.get("id_token","")
+        import base64 as _b64, json as _json
+        parts = id_token.split(".")
+        pad = "=" * (-len(parts[1]) % 4)
+        profile = _json.loads(_b64.urlsafe_b64decode(parts[1]+pad))
+        email = profile.get("email","") or profile.get("preferred_username","")
+        name  = profile.get("name","Microsoft User")
+        if not email:
+            return RedirectResponse("/?auth_error=no_email")
+        if email not in _db["users"]:
+            _db["users"][email] = {"name":name,"email":email,"password":"__oauth__",
+                "plan":"free","billing":"monthly","joined":str(date.today()),
+                "daily_target":50000,"plan_expiry":None,"oauth":"microsoft"}
+        token = create_token({"sub":email})
+        return RedirectResponse(f"/?token={token}&oauth=1")
+    except Exception as ex:
+        return RedirectResponse("/?auth_error=" + urllib.parse.quote(str(ex))[:100])
+
+@app.get("/auth/apple")
+def auth_apple():
+    from fastapi.responses import RedirectResponse
+    client_id = os.environ.get("APPLE_CLIENT_ID","")
+    if not client_id:
+        raise HTTPException(503,"APPLE_CLIENT_ID not configured. See https://developer.apple.com/account/resources/identifiers/list/serviceId to set up Sign in with Apple.")
+    redirect_uri = os.environ.get("OAUTH_REDIRECT_BASE","http://localhost:8000") + "/api/auth/apple/callback"
+    url = (f"https://appleid.apple.com/auth/authorize"
+           f"?client_id={client_id}&redirect_uri={urllib.parse.quote(redirect_uri)}"
+           f"&response_type=code%20id_token&scope=name%20email&response_mode=form_post")
+    return RedirectResponse(url)
+
+@app.post("/auth/apple/callback")
+def auth_apple_callback(code:str="", id_token:str="", error:str=""):
+    from fastapi.responses import RedirectResponse
+    import urllib.parse, base64 as _b64, json as _json
+    if error or not code:
+        return RedirectResponse("/?auth_error=" + urllib.parse.quote(error or "access_denied"))
+    try:
+        parts = id_token.split(".")
+        pad = "=" * (-len(parts[1]) % 4)
+        profile = _json.loads(_b64.urlsafe_b64decode(parts[1]+pad))
+        email = profile.get("email","")
+        if not email:
+            return RedirectResponse("/?auth_error=no_email")
+        if email not in _db["users"]:
+            _db["users"][email] = {"name":"Apple User","email":email,"password":"__oauth__",
+                "plan":"free","billing":"monthly","joined":str(date.today()),
+                "daily_target":50000,"plan_expiry":None,"oauth":"apple"}
+        token = create_token({"sub":email})
+        return RedirectResponse(f"/?token={token}&oauth=1")
+    except Exception as ex:
+        return RedirectResponse("/?auth_error=" + urllib.parse.quote(str(ex))[:100])
+
+# ── Margin / risk profile ─────────────────────────────────────────────────
+class MarginRequest(BaseModel):
+    margin: float
+    risk_profile: str = "moderate"
+
+@app.post("/margin/set")
+def set_margin(req:MarginRequest, user=Depends(get_current_user)):
+    """Onboarding shortcut: save margin + risk profile in one call."""
+    email = user["email"]
+    _db["users"][email]["daily_target"] = req.margin
+    _db["users"][email]["risk_profile"] = req.risk_profile
+    # Also persist to _margin_store so /margin/status reflects it immediately
+    try:
+        _margin_store[email] = float(req.margin)
+    except Exception:
+        pass
+    return {"ok":True,"margin":req.margin,"risk_profile":req.risk_profile}
+
+@app.get("/margin")
+def get_margin(user=Depends(get_current_user)):
+    return {
+        "margin": user.get("daily_target",0),
+        "risk_profile": user.get("risk_profile","moderate"),
+    }
 
 # ── Signals ───────────────────────────────────────────────────────────────
 
@@ -3299,6 +3459,79 @@ def dhan_status():
     return {"has_token": bool(token), "client_id": client_id,
             "expiry": expiry, "expired": expired, "dhan_live": _DHAN_OK}
 
+@app.get("/broker/token-health")
+def broker_token_health():
+    """
+    Check expiry of all daily-rotating broker tokens (Dhan, Upstox, Delta).
+    Uses JWT payload decode (no signature verify) — fast, no network call.
+    Returns list of expired/missing brokers so the dashboard can prompt for refresh.
+    """
+    import base64 as _b64
+
+    def _jwt_exp(token: str) -> int:
+        """Decode JWT exp claim without verifying signature. Returns 0 on failure."""
+        try:
+            parts = token.split(".")
+            if len(parts) < 2:
+                return 0
+            pad = "=" * (-len(parts[1]) % 4)
+            payload = json.loads(_b64.urlsafe_b64decode(parts[1] + pad))
+            return int(payload.get("exp", 0))
+        except Exception:
+            return 0
+
+    now = int(time.time())
+    results = {}
+
+    # ── Dhan ──────────────────────────────────────────────────────────────
+    dhan_tok    = os.environ.get("DHAN_ACCESS_TOKEN", "").strip()
+    dhan_client = os.environ.get("DHAN_CLIENT_ID", "").strip()
+    if dhan_tok:
+        exp = _jwt_exp(dhan_tok)
+        expired = (exp > 0 and now > exp)
+        results["dhan"] = {
+            "label": "Dhan", "has_token": True, "expired": expired,
+            "exp_ts": exp, "client_id": dhan_client,
+            "fields": ["client_id", "access_token"],
+            "hint": "web.dhan.co → Profile → DhanHQ Trading APIs → Access Tokens",
+            "save_endpoint": "/dhan/token",
+        }
+    else:
+        results["dhan"] = {"label": "Dhan", "has_token": False, "expired": False}
+
+    # ── Upstox ────────────────────────────────────────────────────────────
+    upstox_tok = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
+    if upstox_tok:
+        exp = _jwt_exp(upstox_tok)
+        expired = (exp > 0 and now > exp)
+        results["upstox"] = {
+            "label": "Upstox", "has_token": True, "expired": expired,
+            "exp_ts": exp,
+            "fields": ["access_token"],
+            "hint": "Visit /api/broker/upstox-auth to re-authenticate (opens Upstox login)",
+            "auth_url": "/api/broker/upstox-auth",
+            "save_endpoint": "/broker/credentials/upstox",
+        }
+    else:
+        results["upstox"] = {"label": "Upstox", "has_token": False, "expired": False}
+
+    # ── Delta Exchange ─────────────────────────────────────────────────────
+    # Delta uses API key + secret (not expiring JWT) — only flag if missing
+    delta_key    = os.environ.get("DELTA_API_KEY", "").strip()
+    delta_secret = os.environ.get("DELTA_API_SECRET", "").strip()
+    results["delta"] = {
+        "label": "Delta Exchange", "has_token": bool(delta_key and delta_secret),
+        "expired": False,  # API keys don't expire
+        "fields": ["api_key", "api_secret"],
+        "hint": "india.delta.exchange → Profile → API Keys → Create Key (Read + Trade)",
+        "save_endpoint": "/broker/credentials/delta",
+    }
+
+    # Summary: which need action
+    needs_action = [k for k, v in results.items() if not v["has_token"] or v.get("expired")]
+    return {"brokers": results, "needs_action": needs_action, "ok": len(needs_action) == 0}
+
+
 @app.post("/broker/credentials/{broker}")
 def save_broker_credentials(broker: str, req: BrokerCredsRequest, user=Depends(get_current_user)):
     """Hot-save credentials for kite | upstox | delta | dhan without server restart."""
@@ -3380,6 +3613,170 @@ def broker_credentials_status(user=Depends(get_optional_user)):
         "upstox": {"api_key": _field("UPSTOX_API_KEY"), "api_secret": _field("UPSTOX_API_SECRET"), "access_token": _field("UPSTOX_ACCESS_TOKEN"), "connected": bool(os.environ.get("UPSTOX_ACCESS_TOKEN"))},
         "delta": {"api_key": _field("DELTA_API_KEY"), "api_secret": _field("DELTA_API_SECRET"), "connected": bool(os.environ.get("DELTA_API_KEY"))},
     }
+
+# ── Config API — read/write .env from frontend, no manual file editing needed ─
+# Defines every supported env var, its section, label, type, and whether masked.
+_ENV_PATH = Path(__file__).parent.parent.parent / ".env"
+
+_CONFIG_SCHEMA = [
+    # section, key, label, type (text|password|number|toggle|select), options, hint
+    ("Backend Security", [
+        ("SECRET_KEY","JWT Secret Key","password",None,"Change before production. Min 32 chars."),
+    ]),
+    ("Dhan Broker", [
+        ("DHAN_CLIENT_ID","Client ID","text",None,"Profile → DhanHQ Trading APIs → Access Tokens"),
+        ("DHAN_ACCESS_TOKEN","Access Token","password",None,"Expires daily. Paste from web.dhan.co"),
+        ("DHAN_PIN","4-Digit PIN (TOTP auto-refresh)","password",None,"Optional — enables unattended token refresh"),
+        ("DHAN_TOTP_SECRET","TOTP Secret (auto-refresh)","password",None,"BASE32 secret from your 2FA app"),
+    ]),
+    ("Upstox Broker", [
+        ("UPSTOX_API_KEY","API Key","text",None,"developer.upstox.com → Apps → Create App"),
+        ("UPSTOX_API_SECRET","API Secret","password",None,""),
+        ("UPSTOX_ACCESS_TOKEN","Access Token","password",None,"Auto-filled by /broker/upstox-auth — leave blank"),
+    ]),
+    ("Delta Exchange", [
+        ("DELTA_API_KEY","API Key","text",None,"india.delta.exchange → Profile → API Keys"),
+        ("DELTA_API_SECRET","API Secret","password",None,""),
+    ]),
+    ("Zerodha / Kite", [
+        ("KITE_API_KEY","API Key","text",None,"kite.trade → Apps"),
+        ("KITE_API_SECRET","API Secret","password",None,""),
+    ]),
+    ("Telegram Signals", [
+        ("TELEGRAM_BOT_TOKEN","Bot Token","password",None,"@BotFather → /newbot. Format: 123456:AAGxxx"),
+        ("TELEGRAM_CHAT_ID","Chat / Channel ID","text",None,"Personal DM: positive number. Channel: -100xxxxxxx"),
+        ("TELEGRAM_MIN_SCORE","Minimum Signal Score","number",None,"Only send signals scoring ≥ this (0–100)"),
+    ]),
+    ("Razorpay Payments", [
+        ("RAZORPAY_KEY_ID","Key ID","text",None,"dashboard.razorpay.com → Settings → API Keys"),
+        ("RAZORPAY_KEY_SECRET","Key Secret","password",None,""),
+        ("RAZORPAY_WEBHOOK_SECRET","Webhook Secret","password",None,"Optional — for production webhooks only"),
+    ]),
+    ("Social OAuth", [
+        ("OAUTH_REDIRECT_BASE","Backend Base URL","text",None,"e.g. http://localhost:8000 or https://yourdomain.com"),
+        ("GOOGLE_CLIENT_ID","Google Client ID","text",None,"console.cloud.google.com → APIs & Services → Credentials"),
+        ("GOOGLE_CLIENT_SECRET","Google Client Secret","password",None,""),
+        ("MICROSOFT_CLIENT_ID","Microsoft Client ID","text",None,"portal.azure.com → Azure AD → App registrations"),
+        ("MICROSOFT_CLIENT_SECRET","Microsoft Client Secret","password",None,""),
+        ("APPLE_CLIENT_ID","Apple Service ID","text",None,"developer.apple.com → Identifiers → Service IDs"),
+    ]),
+    ("Trading Mode", [
+        ("DEMO_MODE","Demo Mode","toggle",None,"true = allow mock signals (dev only). false = production."),
+        ("BROKER","Active Broker","select",["","dhan","kite","upstox","delta","paper"],"Leave blank to auto-select (Dhan → Kite → Upstox → Paper)"),
+        ("AVAILABLE_MARGIN","Default Margin (₹)","number",None,"Fallback if no user margin set via dashboard"),
+    ]),
+]
+
+_MASKED_KEYS = {k for _,rows in _CONFIG_SCHEMA for k,_l,t,*_ in rows if t=="password"}
+
+def _read_dotenv_raw() -> dict:
+    """Parse .env file → {KEY: raw_value}. Creates file if missing."""
+    if not _ENV_PATH.exists():
+        _ENV_PATH.touch()
+        return {}
+    lines = _ENV_PATH.read_text(encoding="utf-8").splitlines()
+    out = {}
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"): continue
+        if "=" not in line: continue
+        k, _, v = line.partition("=")
+        out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+def _write_dotenv(updates: dict) -> None:
+    """Merge updates into .env file, preserving comments and ordering."""
+    existing_lines = _ENV_PATH.read_text(encoding="utf-8").splitlines() if _ENV_PATH.exists() else []
+    written_keys = set()
+    new_lines = []
+    for line in existing_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            new_lines.append(line); continue
+        if "=" not in stripped:
+            new_lines.append(line); continue
+        k = stripped.split("=", 1)[0].strip()
+        if k in updates:
+            new_lines.append(f"{k}={updates[k]}")
+            written_keys.add(k)
+        else:
+            new_lines.append(line)
+    # Append any new keys not already in the file
+    for k, v in updates.items():
+        if k not in written_keys:
+            new_lines.append(f"{k}={v}")
+    _ENV_PATH.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    # Immediately update os.environ so restart isn't needed
+    for k, v in updates.items():
+        os.environ[k] = v
+
+class ConfigSaveRequest(BaseModel):
+    updates: Dict[str, str]
+
+@app.get("/config")
+def config_read(user=Depends(get_current_user)):
+    """Return all env vars (secrets masked). Requires login."""
+    raw = _read_dotenv_raw()
+    result = {}
+    for section, rows in _CONFIG_SCHEMA:
+        for key, label, kind, opts, hint in rows:
+            val = raw.get(key, os.environ.get(key, ""))
+            is_set = bool(val)
+            result[key] = {
+                "section": section,
+                "label": label,
+                "type": kind,
+                "options": opts,
+                "hint": hint,
+                "value": "••••••••" if (kind == "password" and is_set) else val,
+                "is_set": is_set,
+            }
+    return {"schema": _CONFIG_SCHEMA, "values": result}
+
+@app.post("/config")
+def config_save(req: ConfigSaveRequest, user=Depends(get_current_user)):
+    """
+    Write one or more env vars to .env and live-reload into os.environ.
+    Password fields: if the client sends '••••••••', skip (unchanged).
+    """
+    allowed_keys = {k for _, rows in _CONFIG_SCHEMA for k, *_ in rows}
+    clean = {}
+    for k, v in req.updates.items():
+        if k not in allowed_keys:
+            raise HTTPException(400, f"Unknown config key: {k}")
+        if v == "••••••••":
+            continue  # unchanged masked field — skip
+        clean[k] = v.strip()
+    if not clean:
+        return {"ok": True, "saved": 0, "message": "Nothing to update"}
+    _write_dotenv(clean)
+    # Trigger live side-effects for known keys
+    _apply_config_side_effects(clean)
+    return {"ok": True, "saved": len(clean), "keys": list(clean.keys())}
+
+def _apply_config_side_effects(updates: dict) -> None:
+    """Hot-reload config values into running services without restart."""
+    global _DEMO_MODE
+    if "DEMO_MODE" in updates:
+        _DEMO_MODE = updates["DEMO_MODE"].lower() == "true"
+    # Telegram — rebuild bot if token changed
+    if "TELEGRAM_BOT_TOKEN" in updates or "TELEGRAM_CHAT_ID" in updates:
+        try:
+            import importlib, algo.telegram_bot as _tb
+            _tb.BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            _tb.CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+        except Exception:
+            pass
+    # Dhan — update credentials live
+    if "DHAN_ACCESS_TOKEN" in updates or "DHAN_CLIENT_ID" in updates:
+        try:
+            from algo.dhan_auth import save_token_manual
+            cid = updates.get("DHAN_CLIENT_ID", os.environ.get("DHAN_CLIENT_ID",""))
+            tok = updates.get("DHAN_ACCESS_TOKEN", os.environ.get("DHAN_ACCESS_TOKEN",""))
+            if cid and tok:
+                save_token_manual(cid, tok)
+        except Exception:
+            pass
 
 @app.get("/health")
 def health_check():

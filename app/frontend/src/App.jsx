@@ -468,6 +468,101 @@ body{
   .pcr-bar-fill::after{animation:none}
   .login-wrap::before,.login-wrap::after{animation:none}
 }
+
+/* ── Premium Landing / Login ─────────────────────────────────────── */
+.landing-wrap{
+  min-height:100vh;width:100%;display:flex;overflow:auto;
+  background:radial-gradient(ellipse 80% 60% at 20% 40%,rgba(0,212,255,.08) 0%,transparent 60%),
+             radial-gradient(ellipse 60% 50% at 80% 70%,rgba(167,139,250,.07) 0%,transparent 60%),
+             #050c18;
+  position:relative;}
+.landing-wrap::before{
+  content:'';position:fixed;inset:0;pointer-events:none;
+  background:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2300d4ff' fill-opacity='0.025'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");}
+.landing-left{
+  flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;
+  padding:60px 56px;position:relative;}
+.landing-right{
+  width:440px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  padding:40px 48px;background:rgba(5,14,28,.6);
+  border-left:1px solid rgba(0,212,255,.1);backdrop-filter:blur(20px);}
+.auth-card{width:100%;max-width:360px;}
+.auth-brand{
+  font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:4px;
+  background:linear-gradient(90deg,var(--acc) 0%,#7df9ff 40%,#a78bfa 80%);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  margin-bottom:4px;}
+.auth-tagline{font-size:11px;color:var(--muted);margin-bottom:28px;letter-spacing:.3px;}
+.auth-heading{font-size:20px;font-weight:700;color:var(--text);margin-bottom:5px;letter-spacing:-.3px;}
+.auth-sub{font-size:11px;color:var(--muted);margin-bottom:22px;}
+.auth-tabs{display:flex;border:1px solid var(--br);border-radius:9px;padding:3px;margin-bottom:22px;background:var(--s2);}
+.auth-tab{flex:1;text-align:center;padding:7px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;color:var(--muted);}
+.auth-tab.act{background:var(--acc);color:#000;}
+.social-btn{
+  width:100%;display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:10px 16px;border-radius:9px;border:1px solid var(--br);
+  background:rgba(255,255,255,.03);color:var(--text);font-size:13px;font-weight:500;
+  cursor:pointer;transition:all .15s;margin-bottom:9px;font-family:var(--body);}
+.social-btn:hover{background:rgba(255,255,255,.07);border-color:rgba(0,212,255,.35);}
+.or-divider{
+  display:flex;align-items:center;gap:10px;margin:14px 0;
+  font-size:10px;color:var(--dim);}
+.or-divider::before,.or-divider::after{content:'';flex:1;height:1px;background:var(--br);}
+.auth-inp{
+  width:100%;background:rgba(255,255,255,.04);border:1px solid var(--br);
+  border-radius:8px;color:var(--text);font-family:var(--body);font-size:13px;
+  padding:10px 13px;outline:none;transition:border .12s;margin-bottom:10px;
+  box-sizing:border-box;}
+.auth-inp:focus{border-color:var(--acc);background:rgba(0,212,255,.04);}
+.auth-inp::placeholder{color:var(--dim);}
+.auth-submit{
+  width:100%;padding:11px;border-radius:9px;border:none;
+  background:linear-gradient(135deg,var(--acc) 0%,#0099bb 100%);
+  color:#000;font-weight:700;font-size:14px;cursor:pointer;
+  transition:opacity .15s,transform .1s;font-family:var(--body);margin-top:4px;}
+.auth-submit:hover{opacity:.9;transform:translateY(-1px);}
+.auth-submit:active{transform:translateY(0);}
+.auth-submit:disabled{opacity:.5;cursor:not-allowed;transform:none;}
+.auth-err{
+  background:rgba(255,61,90,.1);border:1px solid rgba(255,61,90,.3);
+  border-radius:7px;padding:9px 12px;font-size:11px;color:var(--red);
+  margin-bottom:10px;}
+.auth-switch{text-align:center;font-size:11px;color:var(--muted);margin-top:16px;}
+.auth-switch span{color:var(--acc);cursor:pointer;font-weight:600;}
+.auth-switch span:hover{text-decoration:underline;}
+
+/* Preview signal card on landing */
+.preview-sig{
+  background:linear-gradient(135deg,rgba(0,212,255,.07),rgba(167,139,250,.05));
+  border:1px solid rgba(0,212,255,.18);border-radius:12px;
+  padding:16px 20px;transition:all .5s ease;}
+.preview-sig-dir{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
+.preview-score-bar{height:3px;background:var(--br);border-radius:99px;margin-top:6px;}
+.preview-score-fill{height:100%;border-radius:99px;transition:width 1s ease;}
+
+/* Onboarding modal */
+.onboard-overlay{
+  position:fixed;inset:0;background:rgba(5,12,24,.92);backdrop-filter:blur(12px);
+  display:flex;align-items:center;justify-content:center;z-index:500;padding:20px;}
+.onboard-card{
+  width:min(520px,100%);background:linear-gradient(160deg,rgba(14,24,44,.97),rgba(8,16,32,.99));
+  border:1px solid rgba(0,212,255,.2);border-radius:18px;
+  box-shadow:0 20px 60px rgba(0,0,0,.5),0 0 0 1px rgba(0,212,255,.05);
+  padding:36px 40px;}
+.onboard-step-dots{display:flex;gap:6px;margin-bottom:28px;}
+.onboard-dot{width:28px;height:3px;border-radius:99px;background:var(--br);transition:background .3s;}
+.onboard-dot.act{background:var(--acc);}
+.onboard-dot.done{background:rgba(0,212,255,.4);}
+.risk-btn{
+  flex:1;padding:10px 8px;border-radius:8px;border:1px solid var(--br);
+  background:var(--s2);color:var(--muted);font-size:11px;font-weight:600;
+  cursor:pointer;transition:all .15s;text-align:center;font-family:var(--body);}
+.risk-btn.act{border-color:var(--acc);color:var(--acc);background:rgba(0,212,255,.08);}
+
+@media(max-width:800px){
+  .landing-left{display:none;}
+  .landing-right{width:100%;border-left:none;padding:24px 20px;}
+}
 `;
 
 function skey(n){const m=(n||"").match(/^([SE]\d)/i);return m?m[1].toUpperCase():"S1";}
@@ -1904,8 +1999,517 @@ function RiskFooter(){
   </footer>);
 }
 
+// ── Token Refresh Banner ─────────────────────────────────────────────────────
+// Shown on login whenever a broker token is expired or missing.
+// Each expired broker gets one row with a paste field + save button.
+function TokenRefreshBanner({health, onDismiss, onSaved}){
+  const [forms,setForms]=useState({});
+  const [msgs,setMsgs]=useState({});
+  const [saving,setSaving]=useState({});
+  const expired=Object.entries(health.brokers||{}).filter(([,v])=>v.has_token&&v.expired);
+  const missing=Object.entries(health.brokers||{}).filter(([,v])=>!v.has_token&&v.label==="Dhan");
+
+  const rows=[...expired,...missing];
+  if(!rows.length)return null;
+
+  const save=async(id,broker)=>{
+    const f=forms[id]||{};
+    setSaving(p=>({...p,[id]:true}));setMsgs(p=>({...p,[id]:""}));
+    try{
+      let endpoint=broker.save_endpoint;
+      let payload={};
+      if(id==="dhan"){
+        if(!f.access_token){setMsgs(p=>({...p,[id]:"⚠ Paste access token first"}));setSaving(p=>({...p,[id]:false}));return;}
+        endpoint="/dhan/token";
+        payload={client_id:f.client_id||broker.client_id||"",access_token:f.access_token};
+      } else if(id==="upstox"){
+        if(!f.access_token){setMsgs(p=>({...p,[id]:"⚠ Paste access token first"}));setSaving(p=>({...p,[id]:false}));return;}
+        payload={access_token:f.access_token};
+      } else if(id==="delta"){
+        if(!f.api_key||!f.api_secret){setMsgs(p=>({...p,[id]:"⚠ Paste both API key and secret"}));setSaving(p=>({...p,[id]:false}));return;}
+        payload={api_key:f.api_key,api_secret:f.api_secret};
+      }
+      const r=await api(endpoint,{method:"POST",body:JSON.stringify(payload)});
+      if(r.ok!==false){
+        setMsgs(p=>({...p,[id]:"✓ Saved — reconnecting…"}));
+        setTimeout(()=>{
+          // re-check health
+          api("/broker/token-health").then(h=>{
+            if(!h.needs_action?.length)onSaved();
+            else{/* still some pending */}
+          }).catch(()=>{});
+        },1500);
+      } else {
+        setMsgs(p=>({...p,[id]:`✗ ${r.message||r.detail||"Save failed"}`}));
+      }
+    }catch(e){setMsgs(p=>({...p,[id]:`✗ ${e.message||"Error"}`}));}
+    finally{setSaving(p=>({...p,[id]:false}));}
+  };
+
+  const COLORS={dhan:"#FF6B00",upstox:"#6C63FF",delta:"#00D4FF"};
+  const ICONS={dhan:"🔶",upstox:"🟣",delta:"🔷"};
+
+  return(
+    <div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:"rgba(0,0,0,.7)",backdropFilter:"blur(6px)",borderBottom:"1px solid rgba(255,200,0,.25)",padding:"14px 20px",display:"flex",flexDirection:"column",gap:12}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:14,color:"#F5C518",fontWeight:700}}>⚠ Broker Token Refresh Required</span>
+          <span style={{fontSize:10,color:"var(--muted)"}}>Paste today's tokens below — no restart needed</span>
+        </div>
+        <button onClick={onDismiss} style={{background:"none",border:"1px solid var(--br)",borderRadius:6,color:"var(--muted)",cursor:"pointer",padding:"3px 9px",fontSize:11}}>Skip</button>
+      </div>
+      {rows.map(([id,broker])=>{
+        const col=COLORS[id]||"#aaa";
+        const ico=ICONS[id]||"🔑";
+        const isUpstoxAuth=id==="upstox"&&broker.auth_url;
+        return(
+          <div key={id} style={{background:`${col}0D`,border:`1px solid ${col}33`,borderRadius:10,padding:"12px 16px",display:"flex",gap:14,alignItems:"flex-start",flexWrap:"wrap"}}>
+            <div style={{minWidth:90}}>
+              <div style={{fontSize:12,fontWeight:700,color:col}}>{ico} {broker.label}</div>
+              <div style={{fontSize:9,color:"var(--red)",marginTop:2}}>{broker.expired?"● Token expired":"● Not configured"}</div>
+            </div>
+            <div style={{flex:1,display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
+              {id==="dhan"&&(
+                <>
+                  <div style={{display:"flex",flexDirection:"column",gap:3,minWidth:140}}>
+                    <label style={{fontSize:9,color:"var(--muted)"}}>Client ID</label>
+                    <input value={forms[id]?.client_id??""} onChange={e=>setForms(p=>({...p,[id]:{...p[id],client_id:e.target.value}}))} placeholder={broker.client_id||"1000000123"} style={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:5,padding:"5px 8px",color:"var(--text)",fontFamily:"var(--mono)",fontSize:10,width:"100%"}}/>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:3,flex:1,minWidth:220}}>
+                    <label style={{fontSize:9,color:"var(--muted)"}}>Access Token <span style={{color:"var(--dim)"}}>— from web.dhan.co → DhanHQ APIs</span></label>
+                    <input type="password" value={forms[id]?.access_token??""} onChange={e=>setForms(p=>({...p,[id]:{...p[id],access_token:e.target.value}}))} placeholder="eyJ0eXAiOiJKV1Q…" style={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:5,padding:"5px 8px",color:"var(--text)",fontFamily:"var(--mono)",fontSize:10,width:"100%"}}/>
+                  </div>
+                </>
+              )}
+              {id==="upstox"&&isUpstoxAuth&&(
+                <div style={{display:"flex",flexDirection:"column",gap:3,flex:1,minWidth:220}}>
+                  <label style={{fontSize:9,color:"var(--muted)"}}>Access Token <span style={{color:"var(--dim)"}}>— or <a href="/api/broker/upstox-auth" target="_blank" rel="noreferrer" style={{color:col}}>click here to re-auth →</a></span></label>
+                  <input type="password" value={forms[id]?.access_token??""} onChange={e=>setForms(p=>({...p,[id]:{...p[id],access_token:e.target.value}}))} placeholder="eyJ0eXAiOiJKV1Q…" style={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:5,padding:"5px 8px",color:"var(--text)",fontFamily:"var(--mono)",fontSize:10,width:"100%"}}/>
+                </div>
+              )}
+              {id==="delta"&&(
+                <>
+                  <div style={{display:"flex",flexDirection:"column",gap:3,minWidth:160}}>
+                    <label style={{fontSize:9,color:"var(--muted)"}}>API Key</label>
+                    <input value={forms[id]?.api_key??""} onChange={e=>setForms(p=>({...p,[id]:{...p[id],api_key:e.target.value}}))} placeholder="API key from Delta" style={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:5,padding:"5px 8px",color:"var(--text)",fontFamily:"var(--mono)",fontSize:10,width:"100%"}}/>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:3,flex:1,minWidth:160}}>
+                    <label style={{fontSize:9,color:"var(--muted)"}}>API Secret</label>
+                    <input type="password" value={forms[id]?.api_secret??""} onChange={e=>setForms(p=>({...p,[id]:{...p[id],api_secret:e.target.value}}))} placeholder="Secret" style={{background:"var(--s2)",border:"1px solid var(--br)",borderRadius:5,padding:"5px 8px",color:"var(--text)",fontFamily:"var(--mono)",fontSize:10,width:"100%"}}/>
+                  </div>
+                </>
+              )}
+              <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+                <button onClick={()=>save(id,broker)} disabled={!!saving[id]} style={{background:col,border:"none",borderRadius:6,color:"#000",fontWeight:700,fontSize:11,padding:"7px 16px",cursor:saving[id]?"not-allowed":"pointer",opacity:saving[id]?.6:1,whiteSpace:"nowrap"}}>
+                  {saving[id]?"Saving…":"Save & Connect"}
+                </button>
+                {msgs[id]&&<div style={{fontSize:10,color:msgs[id].startsWith("✓")?"var(--grn)":"var(--red)"}}>{msgs[id]}</div>}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+// ── Social OAuth icons (inline SVG) ─────────────────────────────────────────
+const GoogleIcon=()=>(
+  <svg width="16" height="16" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+);
+const MicrosoftIcon=()=>(
+  <svg width="16" height="16" viewBox="0 0 21 21"><path fill="#f25022" d="M0 0h10v10H0z"/><path fill="#00a4ef" d="M11 0h10v10H11z"/><path fill="#7fba00" d="M0 11h10v10H0z"/><path fill="#ffb900" d="M11 11h10v10H11z"/></svg>
+);
+const AppleIcon=()=>(
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+);
+
+// ── Preview signals for landing page (static, not from live API) ─────────────
+const PREVIEW_SIGNALS=[
+  {strategy:"S1 Calendar Spread",market:"BANKNIFTY",direction:"BUY",score:82,color:"#00d4ff",expt:"+1.8%"},
+  {strategy:"PCR Contrarian",    market:"NIFTY",    direction:"SELL",score:74,color:"#22c55e",expt:"-0.9%"},
+  {strategy:"E1 EMA Crossover",  market:"RELIANCE", direction:"BUY",score:69,color:"#a78bfa",expt:"+2.1%"},
+];
+
+// ── OnboardingModal ──────────────────────────────────────────────────────────
+function OnboardingModal({user,onDone}){
+  const [step,setStep]=useState(0); // 0=margin, 1=broker
+  const [margin,setMargin]=useState("200000");
+  const [risk,setRisk]=useState("moderate");
+  const [saving,setSaving]=useState(false);
+  const [err,setErr]=useState("");
+  // broker step
+  const [brokerHealth,setBrokerHealth]=useState(null);
+  const [bFields,setBFields]=useState({});
+  const [bSaving,setBSaving]=useState({});
+  const [bMsgs,setBMsgs]=useState({});
+
+  const RISK_OPTS=[
+    {id:"conservative",label:"Conservative",sub:"2% per trade"},
+    {id:"moderate",    label:"Moderate",    sub:"5% per trade"},
+    {id:"aggressive",  label:"Aggressive",  sub:"10% per trade"},
+  ];
+
+  async function saveMargin(){
+    if(!margin||isNaN(Number(margin))||Number(margin)<1000){
+      setErr("Enter a valid margin (min ₹1,000)");return;
+    }
+    setSaving(true);setErr("");
+    try{
+      await api("/margin/set",{method:"POST",body:JSON.stringify({margin:Number(margin),risk_profile:risk})});
+    }catch(e){}
+    setSaving(false);
+    // load broker health for step 2
+    try{
+      const h=await api("/broker/token-health");
+      setBrokerHealth(h);
+    }catch(e){}
+    setStep(1);
+  }
+
+  async function saveBroker(id,endpoint){
+    setBSaving(p=>({...p,[id]:true}));setBMsgs(p=>({...p,[id]:""}));
+    try{
+      const b=brokerHealth?.brokers?.[id];
+      let body={};
+      if(id==="dhan"){body={client_id:bFields[id+"_client_id"]||"",access_token:bFields[id+"_access_token"]||""};}
+      else{body=bFields[id]||{};}
+      await api(endpoint,{method:"POST",body:JSON.stringify(body)});
+      setBMsgs(p=>({...p,[id]:"✓ Connected"}));
+      // refresh health
+      const h=await api("/broker/token-health");setBrokerHealth(h);
+    }catch(e){setBMsgs(p=>({...p,[id]:"Save failed"}));}
+    setBSaving(p=>({...p,[id]:false}));
+  }
+
+  const brokerList=brokerHealth?Object.entries(brokerHealth.brokers):[];
+  const allOk=brokerHealth&&brokerHealth.ok;
+
+  return(
+    <div className="onboard-overlay">
+      <div className="onboard-card">
+        {/* Step dots */}
+        <div className="onboard-step-dots">
+          {["Set Margin","Connect Broker"].map((l,i)=>(
+            <div key={i} className={`onboard-dot ${i<step?"done":i===step?"act":""}`} title={l}/>
+          ))}
+        </div>
+
+        {step===0&&(
+          <>
+            <div style={{fontSize:11,color:"var(--acc)",fontFamily:"var(--mono)",letterSpacing:3,marginBottom:8}}>STEP 1 OF 2</div>
+            <div style={{fontSize:22,fontWeight:700,color:"var(--text)",marginBottom:6}}>Set your trading margin</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:24,lineHeight:1.5}}>
+              This is the capital you'll allocate to AlgoTrade signals. Signals and position sizing are calibrated to your margin.
+            </div>
+            <label style={{fontSize:11,color:"var(--muted)",letterSpacing:.5,marginBottom:6,display:"block"}}>AVAILABLE MARGIN (₹)</label>
+            <input
+              className="auth-inp"
+              type="number"
+              placeholder="e.g. 200000"
+              value={margin}
+              onChange={e=>setMargin(e.target.value)}
+              style={{marginBottom:16,fontSize:16,fontFamily:"var(--mono)",fontWeight:700}}
+            />
+            <label style={{fontSize:11,color:"var(--muted)",letterSpacing:.5,marginBottom:8,display:"block"}}>RISK PROFILE</label>
+            <div style={{display:"flex",gap:8,marginBottom:20}}>
+              {RISK_OPTS.map(r=>(
+                <button key={r.id} className={`risk-btn${risk===r.id?" act":""}`} onClick={()=>setRisk(r.id)}>
+                  <div>{r.label}</div>
+                  <div style={{fontSize:9,opacity:.7,marginTop:3}}>{r.sub}</div>
+                </button>
+              ))}
+            </div>
+            {err&&<div className="auth-err">{err}</div>}
+            <button className="auth-submit" onClick={saveMargin} disabled={saving}>
+              {saving?"Saving…":"Continue →"}
+            </button>
+          </>
+        )}
+
+        {step===1&&(
+          <>
+            <div style={{fontSize:11,color:"var(--acc)",fontFamily:"var(--mono)",letterSpacing:3,marginBottom:8}}>STEP 2 OF 2</div>
+            <div style={{fontSize:22,fontWeight:700,color:"var(--text)",marginBottom:6}}>Connect your broker</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:20,lineHeight:1.5}}>
+              Paste your API tokens below. Tokens are stored locally and used only for live order placement.
+              You can skip this step and connect later from the dashboard.
+            </div>
+
+            {brokerList.length===0&&(
+              <div style={{color:"var(--muted)",fontSize:12,padding:"20px 0"}}>Loading broker status…</div>
+            )}
+
+            {brokerList.map(([id,b])=>{
+              const col=b.expired?"var(--red)":b.has_token?"var(--grn)":"var(--muted)";
+              const status=b.expired?"Token expired":b.has_token?"Connected":"Not connected";
+              const endpoint=b.save_endpoint||`/broker/credentials/${id}`;
+              return(
+                <div key={id} style={{background:"rgba(255,255,255,.03)",border:"1px solid var(--br)",borderRadius:10,padding:"14px 16px",marginBottom:10}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:7,height:7,borderRadius:"50%",background:col,boxShadow:`0 0 6px ${col}`}}/>
+                      <span style={{fontWeight:600,fontSize:13}}>{b.label}</span>
+                    </div>
+                    <span style={{fontSize:10,color:col,fontFamily:"var(--mono)"}}>{status}</span>
+                  </div>
+                  {b.hint&&<div style={{fontSize:10,color:"var(--dim)",marginBottom:8}}>{b.hint}</div>}
+                  {(!b.has_token||b.expired)&&(
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {id==="dhan"&&(
+                        <>
+                          <input className="auth-inp" placeholder="Client ID" style={{marginBottom:0}} onChange={e=>setBFields(p=>({...p,[id+"_client_id"]:e.target.value}))}/>
+                          <input className="auth-inp" placeholder="Access Token" style={{marginBottom:0}} onChange={e=>setBFields(p=>({...p,[id+"_access_token"]:e.target.value}))}/>
+                        </>
+                      )}
+                      {id!=="dhan"&&(b.fields||[]).map(f=>(
+                        <input key={f} className="auth-inp" placeholder={f.replace(/_/g," ")} style={{marginBottom:0}}
+                          onChange={e=>setBFields(p=>({...p,[id]:{...(p[id]||{}),[f]:e.target.value}}))}/>
+                      ))}
+                      <button onClick={()=>saveBroker(id,endpoint)} disabled={!!bSaving[id]}
+                        style={{background:"var(--acc)",border:"none",borderRadius:7,color:"#000",fontWeight:700,fontSize:11,padding:"8px 16px",cursor:"pointer",alignSelf:"flex-end"}}>
+                        {bSaving[id]?"Saving…":"Save & Connect"}
+                      </button>
+                      {bMsgs[id]&&<div style={{fontSize:10,color:bMsgs[id].startsWith("✓")?"var(--grn)":"var(--red)"}}>{bMsgs[id]}</div>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            <div style={{display:"flex",gap:10,marginTop:4}}>
+              <button onClick={onDone}
+                style={{flex:1,padding:"10px",borderRadius:9,border:"1px solid var(--br)",background:"transparent",color:"var(--muted)",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"var(--body)"}}>
+                Skip for now
+              </button>
+              <button onClick={onDone} className="auth-submit" style={{flex:1}}>
+                Launch Dashboard →
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Login / Landing Page ─────────────────────────────────────────────────────
+function Login({onLogin}){
+  const [mode,setMode]=useState("signin"); // signin | signup
+  const [email,setEmail]=useState("");
+  const [password,setPassword]=useState("");
+  const [name,setName]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+  const [onboarding,setOnboarding]=useState(false);
+  const [loggedUser,setLoggedUser]=useState(null);
+  // Preview animation
+  const [previewIdx,setPreviewIdx]=useState(0);
+  useEffect(()=>{const t=setInterval(()=>setPreviewIdx(i=>(i+1)%PREVIEW_SIGNALS.length),3000);return()=>clearInterval(t);},[]);
+
+  const socialLogin=async(provider)=>{
+    // Redirect to OAuth provider — backend handles callback + JWT
+    window.location.href=`/api/auth/${provider}`;
+  };
+
+  const submit=async()=>{
+    setErr("");
+    if(!email||!password){setErr("Email and password are required.");return;}
+    if(mode==="signup"&&!name){setErr("Please enter your name.");return;}
+    setLoading(true);
+    try{
+      const endpoint=mode==="signin"?"/auth/login":"/auth/register";
+      const body=mode==="signin"
+        ?{email,password}
+        :{name,email,password};
+      const res=await api(endpoint,{method:"POST",body:JSON.stringify(body)});
+      if(res.error||res.detail){
+        setErr(typeof res.detail==="string"?res.detail:(res.error||"Login failed. Check credentials."));
+        setLoading(false);return;
+      }
+      if(res.token){
+        localStorage.setItem("tok",res.token);
+        const u=res.user||{email};
+        setLoggedUser(u);
+        if(mode==="signup"){
+          // New users go through onboarding
+          setOnboarding(true);
+        }else{
+          onLogin(u);
+        }
+      }else{
+        setErr("Unexpected response from server.");
+      }
+    }catch(e){
+      setErr("Connection error. Is the backend running?");
+    }
+    setLoading(false);
+  };
+
+  if(onboarding&&loggedUser){
+    return(<><style>{CSS}</style><OnboardingModal user={loggedUser} onDone={()=>onLogin(loggedUser)}/></>);
+  }
+
+  const prev=PREVIEW_SIGNALS[previewIdx];
+  const prevScore=prev.score;
+
+  return(
+    <div className="landing-wrap">
+      {/* Left — branding + live preview */}
+      <div className="landing-left">
+        <div style={{marginBottom:40}}>
+          <div style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:700,letterSpacing:5,
+            background:"linear-gradient(90deg,var(--acc),#a78bfa)",
+            WebkitBackgroundClip:"text",backgroundClip:"text",WebkitTextFillColor:"transparent",
+            marginBottom:6}}>ALGOTRADE</div>
+          <div style={{fontSize:42,fontWeight:800,color:"var(--text)",lineHeight:1.1,letterSpacing:"-1.5px",marginBottom:14}}>
+            Trade smarter.<br/>
+            <span style={{background:"linear-gradient(90deg,var(--acc),#7df9ff 50%,var(--grn))",
+              WebkitBackgroundClip:"text",backgroundClip:"text",WebkitTextFillColor:"transparent"}}>
+              Signal-driven.
+            </span>
+          </div>
+          <div style={{fontSize:14,color:"var(--muted)",lineHeight:1.7,maxWidth:420}}>
+            Real-time NSE F&O signals powered by live option chain data, PCR analysis, and multi-strategy
+            algorithms. Authentic data. Zero guesswork.
+          </div>
+        </div>
+
+        {/* Stat pills */}
+        <div style={{display:"flex",gap:12,marginBottom:40,flexWrap:"wrap"}}>
+          {[
+            {v:"3s",l:"Signal Refresh"},
+            {v:"7",l:"Live Strategies"},
+            {v:"NSE Direct",l:"Data Source"},
+            {v:"Real-time",l:"Option Chain"},
+          ].map(s=>(
+            <div key={s.l} style={{background:"rgba(0,212,255,.05)",border:"1px solid rgba(0,212,255,.14)",
+              borderRadius:9,padding:"8px 14px",minWidth:80}}>
+              <div style={{fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:"var(--acc)"}}>{s.v}</div>
+              <div style={{fontSize:10,color:"var(--muted)",marginTop:2}}>{s.l}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Live-ish signal preview */}
+        <div style={{maxWidth:380}}>
+          <div style={{fontSize:10,color:"var(--dim)",fontFamily:"var(--mono)",letterSpacing:2,marginBottom:10}}>LIVE SIGNAL PREVIEW</div>
+          <div className="preview-sig" key={previewIdx} style={{animation:"fadeUp .4s ease"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:6,height:6,borderRadius:"50%",background:prev.color,boxShadow:`0 0 8px ${prev.color}`}}/>
+                <span style={{fontSize:11,fontWeight:700,color:"var(--text)"}}>{prev.strategy}</span>
+              </div>
+              <div className="preview-sig-dir" style={{color:prev.direction==="BUY"?"var(--grn)":"var(--red)"}}>
+                {prev.direction}
+              </div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontSize:10,color:"var(--muted)"}}>{prev.market}</span>
+              <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--mono)"}}>Expected: <span style={{color:"var(--acc)"}}>{prev.expt}</span></span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+              <span style={{fontSize:9,color:"var(--dim)"}}>Signal Score</span>
+              <span style={{fontSize:9,fontFamily:"var(--mono)",color:prev.color}}>{prevScore}/100</span>
+            </div>
+            <div className="preview-score-bar">
+              <div className="preview-score-fill" style={{width:`${prevScore}%`,background:prev.color}}/>
+            </div>
+          </div>
+          <div style={{fontSize:10,color:"var(--dim)",marginTop:10,fontStyle:"italic"}}>
+            ⚠ Preview only · Live signals require login
+          </div>
+        </div>
+      </div>
+
+      {/* Right — auth panel */}
+      <div className="landing-right">
+        <div className="auth-card">
+          <div className="auth-brand">ALGOTRADE</div>
+          <div className="auth-tagline">NSE F&O Signal Platform · Real Data Only</div>
+
+          <div className="auth-heading">{mode==="signin"?"Welcome back":"Create account"}</div>
+          <div className="auth-sub">{mode==="signin"?"Sign in to your trading dashboard":"Start trading with live NSE signals"}</div>
+
+          {/* Tab switcher */}
+          <div className="auth-tabs">
+            <div className={`auth-tab${mode==="signin"?" act":""}`} onClick={()=>{setMode("signin");setErr("");}}>Sign In</div>
+            <div className={`auth-tab${mode==="signup"?" act":""}`} onClick={()=>{setMode("signup");setErr("");}}>Sign Up</div>
+          </div>
+
+          {/* Social OAuth */}
+          <button className="social-btn" onClick={()=>socialLogin("google")}>
+            <GoogleIcon/> Continue with Google
+          </button>
+          <button className="social-btn" onClick={()=>socialLogin("microsoft")}>
+            <MicrosoftIcon/> Continue with Microsoft
+          </button>
+          <button className="social-btn" onClick={()=>socialLogin("apple")}>
+            <AppleIcon/> Continue with Apple
+          </button>
+
+          <div className="or-divider">or</div>
+
+          {/* Email form */}
+          {mode==="signup"&&(
+            <input className="auth-inp" type="text" placeholder="Full name"
+              value={name} onChange={e=>setName(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&submit()}/>
+          )}
+          <input className="auth-inp" type="email" placeholder="Email address"
+            value={email} onChange={e=>setEmail(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&submit()}/>
+          <input className="auth-inp" type="password"
+            placeholder={mode==="signin"?"Password":"Create password (min 8 chars)"}
+            value={password} onChange={e=>setPassword(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&submit()}/>
+
+          {err&&<div className="auth-err">{err}</div>}
+
+          <button className="auth-submit" onClick={submit} disabled={loading}>
+            {loading?(mode==="signin"?"Signing in…":"Creating account…"):(mode==="signin"?"Sign In →":"Create Account →")}
+          </button>
+
+          <div className="auth-switch">
+            {mode==="signin"
+              ?<>Don't have an account? <span onClick={()=>{setMode("signup");setErr("");}}>Sign up free</span></>
+              :(<>Already have an account? <span onClick={()=>{setMode("signin");setErr("");}}>Sign in</span></>)
+            }
+          </div>
+
+          <div style={{marginTop:20,padding:"12px",background:"rgba(0,212,255,.04)",border:"1px solid rgba(0,212,255,.1)",borderRadius:8}}>
+            <div style={{fontSize:9,color:"var(--dim)",fontFamily:"var(--mono)",letterSpacing:1,marginBottom:4}}>DEMO ACCOUNT</div>
+            <div style={{fontSize:11,color:"var(--muted)"}}>
+              Email: <span style={{color:"var(--acc)",fontFamily:"var(--mono)"}}>demo@algotrade.in</span><br/>
+              Password: <span style={{color:"var(--acc)",fontFamily:"var(--mono)"}}>demo123</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function App(){
-  const [user,setUser]=useState(()=>localStorage.getItem("tok")?{tok:true}:null);
+  const [user,setUser]=useState(()=>{
+    // Handle OAuth redirect-back: /?token=xxx&oauth=1
+    const params=new URLSearchParams(window.location.search);
+    const oauthTok=params.get("token");
+    const authErr=params.get("auth_error");
+    if(oauthTok){
+      localStorage.setItem("tok",oauthTok);
+      // Clean URL without reload
+      window.history.replaceState({},"",window.location.pathname);
+      return {tok:true};
+    }
+    if(authErr){
+      console.warn("[AlgoTrade] OAuth error:",authErr);
+      window.history.replaceState({},"",window.location.pathname);
+    }
+    return localStorage.getItem("tok")?{tok:true}:null;
+  });
   const [signals,setSigs]=useState([]);const [regime,setRegime]=useState(null);
   const [indicesMap,setIdxMap]=useState({});
   // ── Filter memory — persists across refreshes ─────────────────
@@ -1935,6 +2539,7 @@ function App(){
   const [pcrHistory,setPcrHistory]=useState({NIFTY:[],BANKNIFTY:[],FINNIFTY:[]});
   const [logModal,setLogModal]=useState(null);
   const [placeModal,setPlaceModal]=useState(null);
+  const [tokenHealth,setTokenHealth]=useState(null);
   const wsRef=useRef(null);
   const IDX_ORDER=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP","IT"];
   const indices=IDX_ORDER.map(l=>indicesMap[l]).filter(Boolean);
@@ -2019,6 +2624,14 @@ function App(){
     return()=>clearInterval(iv);
   },[user,addSignals]);
 
+  // ── Broker token health check — runs once on login ──────────────────────
+  useEffect(()=>{
+    if(!user)return;
+    api("/broker/token-health").then(h=>{
+      if(h.needs_action?.length>0)setTokenHealth(h);
+    }).catch(()=>{});
+  },[user]);
+
   if(!user)return(<><style>{CSS}</style><Login onLogin={u=>setUser(u)}/></>);
 
   const IST=clock.toLocaleTimeString("en-IN",{timeZone:"Asia/Kolkata",hour12:false});
@@ -2032,19 +2645,20 @@ function App(){
   const selectMarket=m=>{setMktP(m);setStratP(null);setTabP("signals");setOpenMkt(m!=="ALL"?m:null);};
   const toggleDropdown=m=>{setOpenMkt(prev=>prev===m?null:m);};
   const selectStrategy=s=>{setStratP(prev=>prev===s?null:s);setTabP("signals");};
-  const TABS=[{id:"signals",lbl:`Signals (${signals.length})`},{id:"tradelog",lbl:"Trade Log"},{id:"paper",lbl:"Paper"},{id:"analytics",lbl:"Analytics"},{id:"audit",lbl:"🔬 System Health"},{id:"why",lbl:"💡 Why It Works"},{id:"subscription",lbl:"Plans"}];
-  const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"subscription",ico:"★",lbl:"Plans"}];
+  const TABS=[{id:"signals",lbl:`Signals (${signals.length})`},{id:"tradelog",lbl:"Trade Log"},{id:"paper",lbl:"Paper"},{id:"analytics",lbl:"Analytics"},{id:"audit",lbl:"🔬 System Health"},{id:"why",lbl:"💡 Why It Works"},{id:"subscription",lbl:"Plans"},{id:"settings",lbl:"⚙ Settings"}];
+  const MOB_NAV=[{id:"signals",ico:"◈",lbl:"Signals"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"paper",ico:"📄",lbl:"Paper"},{id:"subscription",ico:"★",lbl:"Plans"},{id:"settings",ico:"⚙",lbl:"Settings"}];
 
   return(<><style>{CSS}</style>
     {logModal&&<LogTradeModal sig={logModal} onClose={()=>setLogModal(null)} onLogged={()=>{setLogModal(null);setTabP("tradelog");}}/>}
     {placeModal&&<PlaceOrderModal sig={placeModal} userPlan={user?.plan||"free"} onClose={()=>setPlaceModal(null)}/>}
     {newSigToast&&<div key={newSigToast.id} className="sig-toast">NEW SIGNAL · {newSigToast.text}</div>}
+    {tokenHealth&&<TokenRefreshBanner health={tokenHealth} onDismiss={()=>setTokenHealth(null)} onSaved={()=>setTokenHealth(null)}/>}
     <div className="app">
       <aside className="sidebar">
         <div className="sb-logo"><div className="logo-t">ALGOTRADE</div><div className="logo-s">NSE F&amp;O SIGNAL PLATFORM v3.0</div></div>
         <nav className="sb-nav">
           <div className="nav-sect">Navigate</div>
-          {[{id:"signals",ico:"◈",lbl:"Live Signals"},{id:"tradelog",ico:"📝",lbl:"Trade Logger"},{id:"paper",ico:"📄",lbl:"Paper Trade"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"margin",ico:"₹",lbl:"Margin Setup"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"why",ico:"💡",lbl:"Why It Works"},{id:"subscription",ico:"★",lbl:"Subscription"}].map(n=>(
+          {[{id:"signals",ico:"◈",lbl:"Live Signals"},{id:"tradelog",ico:"📝",lbl:"Trade Logger"},{id:"paper",ico:"📄",lbl:"Paper Trade"},{id:"analytics",ico:"◇",lbl:"Analytics"},{id:"margin",ico:"₹",lbl:"Margin Setup"},{id:"broker",ico:"⚡",lbl:"Broker"},{id:"why",ico:"💡",lbl:"Why It Works"},{id:"subscription",ico:"★",lbl:"Subscription"},{id:"settings",ico:"⚙",lbl:"Settings"}].map(n=>(
             <div key={n.id} className={`nav-it ${tab===n.id?"act":""}`} onClick={()=>setTabP(n.id)}><span className="nav-ico">{n.ico}</span>{n.lbl}</div>
           ))}
           <div className="nav-sect">Markets</div>
@@ -2093,6 +2707,7 @@ function App(){
           {tab==="audit"&&<AuditPanel/>}
           {tab==="why"&&<StrategyTrustPanel/>}
           {tab==="subscription"&&<SubscriptionTab user={user}/>}
+          {tab==="settings"&&<SettingsTab/>}
         </div>
         <RiskFooter/>
       </div>
@@ -2252,6 +2867,232 @@ function AuditPanel() {
           }>Force NSE Reconnect</button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Settings Tab — full .env editor via API, no manual file editing ──────────
+function SettingsTab(){
+  const [cfg,setCfg]=useState(null);      // {schema, values}
+  const [edits,setEdits]=useState({});    // {KEY: value}
+  const [reveals,setReveals]=useState({}); // {KEY: true} = show plaintext
+  const [saving,setSaving]=useState(false);
+  const [saveMsg,setSaveMsg]=useState("");
+  const [openSections,setOpenSections]=useState({});
+  const [testResults,setTestResults]=useState({});
+
+  useEffect(()=>{
+    api("/config").then(d=>{
+      setCfg(d);
+      // Pre-fill edits with current (unmasked) values
+      const init={};
+      Object.entries(d.values||{}).forEach(([k,v])=>{
+        init[k]=v.value; // masked passwords show ••••
+      });
+      setEdits(init);
+      // Open first section by default
+      if(d.schema?.length>0) setOpenSections({[d.schema[0][0]]:true});
+    }).catch(()=>setSaveMsg("⚠ Could not load config — is backend running?"));
+  },[]);
+
+  const field=(key,type)=>{
+    const isPass=type==="password";
+    const shown=reveals[key];
+    return(
+      <div style={{position:"relative",marginBottom:0}}>
+        <input
+          type={isPass&&!shown?"password":"text"}
+          className="auth-inp"
+          style={{marginBottom:0,paddingRight:isPass?36:12,fontFamily:isPass&&!shown?"monospace":"var(--body)"}}
+          value={edits[key]??""}
+          onChange={e=>setEdits(p=>({...p,[key]:e.target.value}))}
+          placeholder={isPass?"Paste new value (leave blank to keep current)":""}
+        />
+        {isPass&&(
+          <button onClick={()=>setReveals(p=>({...p,[key]:!p[key]}))}
+            style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",
+              background:"none",border:"none",cursor:"pointer",color:"var(--muted)",fontSize:12,padding:0}}>
+            {shown?"🙈":"👁"}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const saveSection=async(sectionKeys)=>{
+    setSaving(true);setSaveMsg("");
+    const updates={};
+    sectionKeys.forEach(k=>{
+      const v=edits[k];
+      if(v!==undefined) updates[k]=v;
+    });
+    try{
+      const r=await api("/config",{method:"POST",body:JSON.stringify({updates})});
+      if(r.ok){
+        setSaveMsg(`✓ Saved ${r.saved} setting${r.saved!==1?"s":""}`);
+        // Refresh to get updated masked values
+        api("/config").then(d=>{setCfg(d);});
+      }else{setSaveMsg("Save failed");}
+    }catch(e){setSaveMsg("Connection error");}
+    setSaving(false);
+    setTimeout(()=>setSaveMsg(""),4000);
+  };
+
+  const testTelegram=async()=>{
+    setTestResults(p=>({...p,telegram:"testing…"}));
+    try{
+      const r=await api("/telegram/test",{method:"POST"});
+      setTestResults(p=>({...p,telegram:r.ok?"✓ Message sent":"⚠ "+r.error}));
+    }catch(e){setTestResults(p=>({...p,telegram:"Connection error"}));}
+  };
+
+  if(!cfg) return(
+    <div style={{padding:40,textAlign:"center",color:"var(--muted)"}}>
+      {saveMsg||"Loading configuration…"}
+    </div>
+  );
+
+  const ICONS={
+    "Backend Security":"🔑","Dhan Broker":"🟧","Upstox Broker":"🟦",
+    "Delta Exchange":"🔺","Zerodha / Kite":"🟢","Telegram Signals":"✈",
+    "Razorpay Payments":"💳","Social OAuth":"🔗","Trading Mode":"⚙",
+  };
+
+  return(
+    <div style={{maxWidth:740,margin:"0 auto",padding:"20px 14px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
+        <div>
+          <div style={{fontSize:18,fontWeight:700,color:"var(--text)"}}>Platform Configuration</div>
+          <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>
+            All settings saved directly to .env — no manual file editing required
+          </div>
+        </div>
+        {saveMsg&&(
+          <div style={{fontSize:12,color:saveMsg.startsWith("✓")?"var(--grn)":"var(--red)",
+            background:saveMsg.startsWith("✓")?"rgba(0,255,157,.08)":"rgba(255,61,90,.08)",
+            border:`1px solid ${saveMsg.startsWith("✓")?"rgba(0,255,157,.2)":"rgba(255,61,90,.2)"}`,
+            borderRadius:8,padding:"6px 14px"}}>
+            {saveMsg}
+          </div>
+        )}
+      </div>
+
+      {cfg.schema.map(([section,rows])=>{
+        const isOpen=!!openSections[section];
+        const sectionKeys=rows.map(r=>r[0]);
+        const anySet=sectionKeys.some(k=>cfg.values[k]?.is_set);
+
+        return(
+          <div key={section} style={{background:"rgba(255,255,255,.02)",border:"1px solid var(--br)",
+            borderRadius:12,marginBottom:10,overflow:"hidden"}}>
+
+            {/* Section header */}
+            <div onClick={()=>setOpenSections(p=>({...p,[section]:!p[section]}))}
+              style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                padding:"14px 18px",cursor:"pointer",userSelect:"none"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:16}}>{ICONS[section]||"⚙"}</span>
+                <div>
+                  <div style={{fontWeight:600,fontSize:13,color:"var(--text)"}}>{section}</div>
+                  <div style={{fontSize:10,color:anySet?"var(--grn)":"var(--muted)",marginTop:1}}>
+                    {anySet?"Configured":"Not configured"}
+                  </div>
+                </div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                {anySet&&<div style={{width:6,height:6,borderRadius:"50%",background:"var(--grn)",boxShadow:"0 0 6px var(--grn)"}}/>}
+                <span style={{color:"var(--muted)",fontSize:10,transition:"transform .15s",
+                  display:"inline-block",transform:isOpen?"rotate(180deg)":"none"}}>▾</span>
+              </div>
+            </div>
+
+            {isOpen&&(
+              <div style={{padding:"0 18px 18px",borderTop:"1px solid var(--br)"}}>
+                {rows.map(([key,label,type,opts,hint])=>{
+                  const val=cfg.values[key];
+                  return(
+                    <div key={key} style={{marginTop:14}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
+                        <label style={{fontSize:11,color:"var(--muted)",fontWeight:500}}>{label}</label>
+                        {val?.is_set&&<span style={{fontSize:9,color:"var(--grn)",fontFamily:"var(--mono)"}}>SET</span>}
+                      </div>
+                      {type==="toggle"?(
+                        <div style={{display:"flex",gap:8}}>
+                          {["false","true"].map(opt=>(
+                            <button key={opt} onClick={()=>setEdits(p=>({...p,[key]:opt}))}
+                              style={{flex:1,padding:"8px",borderRadius:7,
+                                border:`1px solid ${edits[key]===opt?"var(--acc)":"var(--br)"}`,
+                                background:edits[key]===opt?"rgba(0,212,255,.1)":"var(--s2)",
+                                color:edits[key]===opt?"var(--acc)":"var(--muted)",
+                                fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"var(--body)"}}>
+                              {opt==="false"?"Production (false)":"Demo Mode (true)"}
+                            </button>
+                          ))}
+                        </div>
+                      ):type==="select"?(
+                        <select className="auth-inp" style={{marginBottom:0}}
+                          value={edits[key]??""} onChange={e=>setEdits(p=>({...p,[key]:e.target.value}))}>
+                          {(opts||[]).map(o=><option key={o} value={o}>{o||"Auto (recommended)"}</option>)}
+                        </select>
+                      ):type==="number"?(
+                        <input type="number" className="auth-inp" style={{marginBottom:0}}
+                          value={edits[key]??""} onChange={e=>setEdits(p=>({...p,[key]:e.target.value}))}
+                          placeholder={hint||""}/>
+                      ):(
+                        field(key,type)
+                      )}
+                      {hint&&<div style={{fontSize:10,color:"var(--dim)",marginTop:4}}>{hint}</div>}
+                    </div>
+                  );
+                })}
+
+                {/* Section-specific action buttons */}
+                {section==="Telegram Signals"&&(
+                  <div style={{display:"flex",gap:8,marginTop:16}}>
+                    <button onClick={testTelegram}
+                      style={{padding:"7px 16px",borderRadius:7,border:"1px solid rgba(0,212,255,.3)",
+                        background:"rgba(0,212,255,.05)",color:"var(--acc)",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"var(--body)"}}>
+                      Send Test Message
+                    </button>
+                    {testResults.telegram&&<span style={{fontSize:11,color:testResults.telegram.startsWith("✓")?"var(--grn)":"var(--red)",alignSelf:"center"}}>{testResults.telegram}</span>}
+                  </div>
+                )}
+                {section==="Dhan Broker"&&(
+                  <div style={{marginTop:12,padding:"9px 12px",background:"rgba(0,212,255,.04)",
+                    border:"1px solid rgba(0,212,255,.1)",borderRadius:7,fontSize:11,color:"var(--muted)"}}>
+                    🔗 Get token: <span style={{color:"var(--acc)"}}>web.dhan.co</span> → Profile → DhanHQ Trading APIs → Access Tokens
+                  </div>
+                )}
+                {section==="Upstox Broker"&&(
+                  <div style={{marginTop:12}}>
+                    <a href="/api/broker/upstox-auth" target="_blank"
+                      style={{display:"inline-block",padding:"7px 16px",borderRadius:7,
+                        border:"1px solid rgba(0,212,255,.3)",background:"rgba(0,212,255,.05)",
+                        color:"var(--acc)",fontSize:11,fontWeight:600,textDecoration:"none"}}>
+                      Re-authenticate Upstox →
+                    </a>
+                  </div>
+                )}
+
+                {/* Save button per section */}
+                <button onClick={()=>saveSection(sectionKeys)} disabled={saving}
+                  style={{marginTop:18,padding:"9px 22px",borderRadius:8,border:"none",
+                    background:"linear-gradient(135deg,var(--acc),#0099bb)",
+                    color:"#000",fontWeight:700,fontSize:12,cursor:saving?"not-allowed":"pointer",
+                    opacity:saving?.7:1,fontFamily:"var(--body)"}}>
+                  {saving?"Saving…":`Save ${section}`}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div style={{marginTop:20,padding:"12px 16px",background:"rgba(255,61,90,.05)",
+        border:"1px solid rgba(255,61,90,.15)",borderRadius:9,fontSize:11,color:"var(--muted)"}}>
+        🔒 Secrets are write-only — masked values are never sent to the browser.
+        Changes are applied live without restarting the backend.
+      </div>
     </div>
   );
 }
