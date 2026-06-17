@@ -173,12 +173,32 @@ def _validate_signal(sig: dict) -> bool:
 _DEMO_MODE = os.environ.get("DEMO_MODE", "").lower() in ("true", "1", "yes")
 
 SECRET_KEY   = os.environ.get("SECRET_KEY", "algotrade-dev-secret-CHANGE-IN-PROD")
+if SECRET_KEY == "algotrade-dev-secret-CHANGE-IN-PROD":
+    logging.warning("⚠ SECRET_KEY is still the default dev value! Set a strong SECRET_KEY in .env before going live.")
 ALGORITHM   = "HS256"
 TOKEN_EXPIRE = 60 * 24 * 7
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 _db: Dict[str, Any] = {"users": {}, "trades": {}, "signals": [], "regime": {}}
 _paper: Dict[str, Any] = {}
+
+# ── Login rate limiter (in-memory, resets on restart — intentional) ──────────
+_login_attempts: Dict[str, list] = {}   # ip → [timestamp, ...]
+_RATE_LIMIT_WINDOW = 60   # seconds
+_RATE_LIMIT_MAX    = 8    # max attempts per window
+
+def _check_rate_limit(ip: str) -> bool:
+    """Returns True if allowed, False if rate-limited."""
+    import time as _t
+    now = _t.time()
+    attempts = _login_attempts.get(ip, [])
+    # Keep only attempts within the window
+    attempts = [ts for ts in attempts if now - ts < _RATE_LIMIT_WINDOW]
+    attempts.append(now)
+    _login_attempts[ip] = attempts
+    return len(attempts) <= _RATE_LIMIT_MAX
+
+
 
 # ── Loop diagnostics (in-memory, reset on restart) ────────────────────────
 _loop_diag: Dict[str, Any] = {
@@ -194,7 +214,9 @@ _loop_diag: Dict[str, Any] = {
 }
 
 # ── Daily signal persistence ──────────────────────────────────────────────
-_DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+# Use project-relative data/ so it works without admin rights on Windows
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+_DATA_DIR = Path(os.environ.get("DATA_DIR", str(_PROJECT_ROOT / "data")))
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Broker credentials persistence ───────────────────────────────────────────
@@ -318,6 +340,72 @@ def _load_today_signals() -> None:
             logging.info(f"[Persist] Loaded {len(_db['signals'])} signals from {fp.name}")
     except Exception as _le:
         logging.debug(f"[Persist] signal load error: {_le}")
+
+# ── Persistent storage helpers (users, paper trades, accuracy, trades) ───────
+_USERS_FILE    = _DATA_DIR / "users.json"
+_PAPER_FILE    = _DATA_DIR / "paper_trades.json"
+_ACCURACY_FILE = _DATA_DIR / "accuracy.json"
+_TRADES_FILE   = _DATA_DIR / "trade_log.json"
+
+def _load_persistent_db() -> None:
+    """Load all persistent data on startup — survives backend restarts."""
+    global _paper, _accuracy_db
+    if _USERS_FILE.exists():
+        try:
+            data = json.loads(_USERS_FILE.read_text())
+            if isinstance(data, dict):
+                _db["users"].update(data)
+                logging.info(f"[Persist] Loaded {len(data)} users from disk")
+        except Exception as e:
+            logging.warning(f"[Persist] Could not load users: {e}")
+    if _PAPER_FILE.exists():
+        try:
+            data = json.loads(_PAPER_FILE.read_text())
+            if isinstance(data, dict):
+                _paper.update(data)
+                logging.info(f"[Persist] Loaded paper trades for {len(data)} accounts")
+        except Exception as e:
+            logging.warning(f"[Persist] Could not load paper trades: {e}")
+    if _ACCURACY_FILE.exists():
+        try:
+            data = json.loads(_ACCURACY_FILE.read_text())
+            if isinstance(data, dict):
+                _accuracy_db.update(data)
+                logging.info(f"[Persist] Loaded {len(data)} accuracy outcomes")
+        except Exception as e:
+            logging.warning(f"[Persist] Could not load accuracy outcomes: {e}")
+    if _TRADES_FILE.exists():
+        try:
+            data = json.loads(_TRADES_FILE.read_text())
+            if isinstance(data, dict):
+                _db["trades"].update(data)
+                logging.info(f"[Persist] Loaded trade log from disk")
+        except Exception as e:
+            logging.warning(f"[Persist] Could not load trade log: {e}")
+
+def _save_users() -> None:
+    try:
+        _USERS_FILE.write_text(json.dumps(_db["users"], default=str, indent=2))
+    except Exception as e:
+        logging.error(f"[Persist] users save failed: {e}")
+
+def _save_paper() -> None:
+    try:
+        _PAPER_FILE.write_text(json.dumps(_paper, default=str, indent=2))
+    except Exception as e:
+        logging.error(f"[Persist] paper save failed: {e}")
+
+def _save_accuracy() -> None:
+    try:
+        _ACCURACY_FILE.write_text(json.dumps(_accuracy_db, default=str, indent=2))
+    except Exception as e:
+        logging.error(f"[Persist] accuracy save failed: {e}")
+
+def _save_trades() -> None:
+    try:
+        _TRADES_FILE.write_text(json.dumps(_db["trades"], default=str, indent=2))
+    except Exception as e:
+        logging.error(f"[Persist] trade log save failed: {e}")
 
 # ── Subscription Plans ────────────────────────────────────────────────────
 TIERS = {
@@ -616,8 +704,18 @@ def _nse_signal():
         spread = ce["spread"]
         fair   = ce["fair"]
         dev    = ce["deviation"]
-        score  = min(95, max(30, 50 + int(abs(dev) * 8)))
-        dirn   = "LONG" if dev < -3 else "SHORT" if dev > 3 else "WAIT"
+        # Fair value from greeks is 0 when NSE API returns no greeks.
+        # Use DTE-adjusted premium ratio instead: fair = near_ltp * far_DTE_ratio
+        # This produces realistic deviation even without theta/vega from NSE.
+        near_ltp = ce.get("ltp", 0) or 0
+        far_ltp  = ce.get("far_leg", 0) or 0
+        if near_ltp > 0 and far_ltp > 0 and fair == 0:
+            # Estimate: far should be ~1.4x-1.6x near based on typical term structure
+            fair = round(near_ltp * 1.45, 2)
+            dev  = round(spread - fair, 2)
+        score  = min(95, max(35, 50 + int(abs(dev) * 5)))
+        # Threshold 1.5pts — realistic for NSE option premium moves
+        dirn   = "LONG" if dev < -1.5 else "SHORT" if dev > 1.5 else "WAIT"
         if dirn == "WAIT":
             return None
         sig = {
@@ -873,24 +971,33 @@ def _pcr_signal_from_oc(oc: dict, instrument: str, vix=None) -> dict:
     top_pe     = oc.get("top_pe_oi_strike")
     if not pcr or not spot:
         return None
-    if pcr < 0.6:
-        zone = "OVERBOUGHT"; direction = "SHORT"; signal = "BEARISH REVERSAL EXPECTED"
-        score = min(90, int(70 + (0.6 - pcr) * 50))
-        reason = f"PCR {pcr:.3f} < 0.60 — greed zone, fade the crowd"
-    elif pcr > 1.3:
-        zone = "OVERSOLD"; direction = "LONG"; signal = "BULLISH REVERSAL EXPECTED"
-        score = min(90, int(70 + (pcr - 1.3) * 30))
-        reason = f"PCR {pcr:.3f} > 1.30 — fear zone, contrarian long"
-    elif 0.6 <= pcr < 0.85:
-        zone = "BEARISH_WATCH"; direction = "SHORT"; signal = "APPROACHING OVERBOUGHT — WATCH SHORT"
-        score = 45
-        reason = f"PCR {pcr:.3f} in bearish watch zone (0.60–0.85) — building SHORT bias"
-    elif 1.15 < pcr <= 1.3:
-        zone = "BULLISH_WATCH"; direction = "LONG"; signal = "APPROACHING OVERSOLD — WATCH LONG"
-        score = 45
-        reason = f"PCR {pcr:.3f} in bullish watch zone (1.15–1.30) — building LONG bias"
+    # Thresholds calibrated to real NSE behaviour: BANKNIFTY PCR lives 0.70-1.25
+    if pcr < 0.70:
+        zone = "STRONG_GREED"; direction = "SHORT"; signal = "HIGH CONFIDENCE SHORT — EUPHORIA"
+        score = min(92, int(76 + (0.70 - pcr) * 80))
+        reason = f"PCR {pcr:.3f} < 0.70 — euphoric call buying, reliable reversal SHORT"
+    elif pcr < 0.80:
+        zone = "GREED"; direction = "SHORT"; signal = "BEARISH REVERSAL — GREED ZONE"
+        score = min(82, int(64 + (0.80 - pcr) * 60))
+        reason = f"PCR {pcr:.3f} in greed zone (0.70-0.80) — fade the crowd SHORT"
+    elif pcr < 0.92:
+        zone = "BEARISH_WATCH"; direction = "SHORT"; signal = "SHORT BIAS BUILDING"
+        score = 50
+        reason = f"PCR {pcr:.3f} in bearish watch (0.80-0.92) — call buying increasing"
+    elif pcr > 1.30:
+        zone = "STRONG_FEAR"; direction = "LONG"; signal = "HIGH CONFIDENCE LONG — PANIC"
+        score = min(92, int(76 + (pcr - 1.30) * 40))
+        reason = f"PCR {pcr:.3f} > 1.30 — panic put buying, reliable reversal LONG"
+    elif pcr > 1.20:
+        zone = "FEAR"; direction = "LONG"; signal = "BULLISH REVERSAL — FEAR ZONE"
+        score = min(82, int(64 + (pcr - 1.20) * 55))
+        reason = f"PCR {pcr:.3f} in fear zone (1.20-1.30) — contrarian LONG"
+    elif pcr > 1.10:
+        zone = "BULLISH_WATCH"; direction = "LONG"; signal = "LONG BIAS BUILDING"
+        score = 50
+        reason = f"PCR {pcr:.3f} in bullish watch (1.10-1.20) — put buying increasing"
     else:
-        return None  # neutral 0.85-1.15, no signal
+        return None  # neutral 0.92-1.10, no signal
     return {
         "timestamp": datetime.now().isoformat(),
         "source": "nse_node_pcr", "market": "FO",
@@ -1540,6 +1647,89 @@ async def _supervised(coro_fn, name: str):
             logging.exception(f"[{name}] CRASHED — restarting in 5s")
             await asyncio.sleep(5)
 
+# ── Token auto-refresh state ────────────────────────────────────────────────
+_token_refresh_status = {
+    "last_refresh": None,       # ISO timestamp of last successful refresh
+    "last_attempt": None,       # ISO timestamp of last attempt
+    "totp_configured": False,   # True if DHAN_PIN + DHAN_TOTP_SECRET set
+    "next_refresh": None,       # ISO timestamp of next scheduled refresh
+    "status": "not_configured", # not_configured | scheduled | refreshed | failed
+}
+
+async def _dhan_token_refresh_loop():
+    """
+    Runs in background. Every weekday at 8:50 AM IST, auto-refreshes the Dhan
+    access token via TOTP so the user never has to rotate it manually.
+    Requires DHAN_PIN + DHAN_TOTP_SECRET in .env (set once, never touch again).
+    """
+    import pytz
+    from datetime import datetime as _dt
+    IST = pytz.timezone("Asia/Kolkata")
+
+    while True:
+        try:
+            now_ist = _dt.now(IST)
+            pin   = os.environ.get("DHAN_PIN", "").strip()
+            totp  = os.environ.get("DHAN_TOTP_SECRET", "").strip()
+            _token_refresh_status["totp_configured"] = bool(pin and totp)
+
+            if not (pin and totp):
+                _token_refresh_status["status"] = "not_configured"
+                await asyncio.sleep(300)   # check again in 5 min (user may set creds via Settings)
+                continue
+
+            # Target: 8:50 AM IST on weekdays
+            target = now_ist.replace(hour=8, minute=50, second=0, microsecond=0)
+            if now_ist >= target or now_ist.weekday() >= 5:
+                # Already past 8:50 today, or weekend — aim for next weekday 8:50
+                days_ahead = 1
+                while True:
+                    candidate = target + timedelta(days=days_ahead)
+                    if candidate.weekday() < 5:
+                        target = candidate
+                        break
+                    days_ahead += 1
+
+            wait_secs = (target - now_ist).total_seconds()
+            _token_refresh_status["next_refresh"] = target.isoformat()
+            _token_refresh_status["status"] = "scheduled"
+            logging.info(f"[TokenRefresh] Next auto-refresh in {wait_secs/3600:.1f}h at {target.strftime('%H:%M IST %d %b')}")
+
+            await asyncio.sleep(max(wait_secs, 1))
+
+            # Execute TOTP refresh
+            _token_refresh_status["last_attempt"] = _dt.now(IST).isoformat()
+            try:
+                from algo.dhan_auth import refresh_token_totp
+                new_token = refresh_token_totp()
+                if new_token:
+                    _write_env_vars({"DHAN_ACCESS_TOKEN": new_token})
+                    os.environ["DHAN_ACCESS_TOKEN"] = new_token
+                    # Restart Dhan ticker with new token
+                    try:
+                        from algo.dhan_ticker import start_dhan_ticker
+                        start_dhan_ticker([260105, 260106])
+                    except Exception:
+                        pass
+                    _token_refresh_status["last_refresh"] = _dt.now(IST).isoformat()
+                    _token_refresh_status["status"] = "refreshed"
+                    logging.info("[TokenRefresh] ✓ Dhan token auto-refreshed via TOTP")
+                else:
+                    _token_refresh_status["status"] = "failed"
+                    logging.error("[TokenRefresh] ✗ TOTP refresh returned no token — check DHAN_PIN/DHAN_TOTP_SECRET")
+            except Exception as e:
+                _token_refresh_status["status"] = "failed"
+                logging.error(f"[TokenRefresh] Exception: {e}")
+
+            await asyncio.sleep(60)   # avoid tight loop after execution
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"[TokenRefresh] Loop error: {e}")
+            await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     if "demo@algotrade.in" not in _db["users"]:
@@ -1548,6 +1738,7 @@ async def lifespan(app:FastAPI):
             "joined":str(date.today()),"daily_target":50000,"plan_expiry":str(date.today()+timedelta(days=30))}
     logging.info("AlgoTrade v3.4 started — http://localhost:8000")
     _load_broker_credentials()   # load saved broker tokens before anything else
+    _load_persistent_db()        # load users, paper trades, accuracy, trade log
     _load_today_signals()
     if _DHAN_OK:
         # BANKNIFTY spot + near/far CE/PE tokens (standard Dhan security_ids)
@@ -1556,12 +1747,17 @@ async def lifespan(app:FastAPI):
     t1 = asyncio.create_task(_supervised(indices_loop,      "IndicesLoop"))
     t2 = asyncio.create_task(_supervised(signal_loop,       "SignalLoop"))
     t3 = asyncio.create_task(_supervised(chain_prefetch_loop, "ChainPrefetch"))
+    t4 = asyncio.create_task(_dhan_token_refresh_loop())
     yield
-    t1.cancel(); t2.cancel(); t3.cancel()
+    t1.cancel(); t2.cancel(); t3.cancel(); t4.cancel()
 
 app=FastAPI(title="AlgoTrade API",version="3.4.0",lifespan=lifespan)
+# CORS: localhost always allowed; add ALLOWED_ORIGINS env var for production domain
+_default_origins = ["http://localhost:5173","http://localhost:3000","http://127.0.0.1:5173","http://127.0.0.1:3000"]
+_extra_origins   = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS","").split(",") if o.strip()]
+_cors_origins    = _default_origins + _extra_origins
 app.add_middleware(CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 
 # ── Auth ──────────────────────────────────────────────────────────────────
@@ -1571,11 +1767,15 @@ def register(req:RegisterRequest):
     _db["users"][req.email]={"name":req.name,"email":req.email,
         "password":hash_password(req.password),"plan":"free","billing":"monthly",
         "joined":str(date.today()),"daily_target":50000,"plan_expiry":None}
+    _save_users()
     return {"token":create_token({"sub":req.email}),
             "user":{k:v for k,v in _db["users"][req.email].items() if k!="password"}}
 
 @app.post("/auth/login")
-def login(req:LoginRequest):
+def login(req:LoginRequest, request:Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        raise HTTPException(429, "Too many login attempts. Wait 60 seconds and retry.")
     user=_db["users"].get(req.email)
     if not user or not verify_password(req.password,user["password"]): raise HTTPException(401,"Invalid credentials")
     return {"token":create_token({"sub":req.email}),
@@ -1730,6 +1930,7 @@ def set_margin(req:MarginRequest, user=Depends(get_current_user)):
     """Onboarding shortcut: save margin + risk profile in one call."""
     email = user["email"]
     _db["users"][email]["daily_target"] = req.margin
+    _save_users()
     _db["users"][email]["risk_profile"] = req.risk_profile
     # Also persist to _margin_store so /margin/status reflects it immediately
     try:
@@ -1905,6 +2106,7 @@ def signals_audit():
             "last_signal":   last_signal,
         },
         "strategies":        strategies_status,
+        "token_auto_refresh": {**_token_refresh_status, "dhan_token_present": bool(os.environ.get("DHAN_ACCESS_TOKEN"))},
         "action_required":   (
             "OK — signals flowing" if live_today > 0
             else "NSE feed down — check network / NSE rate limits" if not _NSE_OK and mkt
@@ -2416,6 +2618,7 @@ def tl_enter(req:TLTradeEnterRequest,user=Depends(get_current_user)):
                "exit_spread":None,"pnl_pts":None,"pnl_inr":None,
                "status":"OPEN","notes":req.notes,"mode":"LIVE","source":"manual"}
         _db["trades"].setdefault(user["email"],[]).append(trade)
+        _save_trades()
         return {"ok":True,"trade":trade,"source":"db"}
     from datetime import datetime as dt; ls=LOT_SIZES.get(req.instrument,25)
     row={"time":dt.now().strftime("%H:%M:%S"),"strategy":req.strategy,
@@ -2532,6 +2735,7 @@ def paper_trade_enter(req:PaperTradeRequest,user=Depends(get_current_user)):
            "exit_spread":None,"pnl_pts":None,"pnl_inr":None,
            "margin_used":margin,"status":"OPEN","notes":req.notes,"mode":"PAPER"}
     acc["trades"].append(trade)
+    _save_paper()
     return {"paper_trade":trade,"remaining_balance":acc["balance"]}
 
 @app.post("/paper/close")
@@ -2710,6 +2914,7 @@ async def record_signal_outcome(data: dict):
         "correct":        correct,
         "recorded_at":    _ist_now().isoformat(),
     }
+    _save_accuracy()
     return {"ok": True, "correct": correct, "move_pts": round(move, 2)}
 
 @app.get("/debug/loop")
@@ -3138,7 +3343,16 @@ def refresh_movers():
 
 # ── WebSocket ─────────────────────────────────────────────────────────────
 @app.websocket("/ws/signals")
-async def ws_signals(ws:WebSocket):
+async def ws_signals(ws:WebSocket, token:str = ""):
+    """Signal feed WebSocket. Accepts ?token=<jwt> for auth (optional — non-auth = delayed/limited)."""
+    # Optional auth: validate token if provided
+    _ws_user = None
+    if token:
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            _ws_user = _db["users"].get(payload.get("sub"))
+        except Exception:
+            pass   # invalid token → treat as guest
     await broadcaster.connect(ws)
     try:
         for sig in (_db["signals"][-20:] if _db["signals"] else []):
@@ -3578,7 +3792,49 @@ def broker_token_health():
 
     # Summary: which need action
     needs_action = [k for k, v in results.items() if not v["has_token"] or v.get("expired")]
-    return {"brokers": results, "needs_action": needs_action, "ok": len(needs_action) == 0}
+    return {
+        "brokers": results,
+        "needs_action": needs_action,
+        "ok": len(needs_action) == 0,
+        "auto_refresh": {**_token_refresh_status, "dhan_token_present": bool(os.environ.get("DHAN_ACCESS_TOKEN"))},
+    }
+
+
+@app.post("/broker/refresh-now")
+async def broker_refresh_now(user=Depends(get_current_user)):
+    """
+    Manually trigger Dhan TOTP token refresh immediately.
+    Called from Settings tab 'Refresh Token Now' button.
+    """
+    pin   = os.environ.get("DHAN_PIN", "").strip()
+    totp  = os.environ.get("DHAN_TOTP_SECRET", "").strip()
+    if not (pin and totp):
+        return {"ok": False, "error": "DHAN_PIN and DHAN_TOTP_SECRET not configured. Set them in Settings → Broker Tokens."}
+    try:
+        from algo.dhan_auth import refresh_token_totp
+        new_token = await asyncio.get_event_loop().run_in_executor(None, refresh_token_totp)
+        if new_token:
+            _write_env_vars({"DHAN_ACCESS_TOKEN": new_token})
+            os.environ["DHAN_ACCESS_TOKEN"] = new_token
+            _token_refresh_status["last_refresh"] = _ist_now().isoformat()
+            _token_refresh_status["status"] = "refreshed"
+            try:
+                from algo.dhan_ticker import start_dhan_ticker
+                start_dhan_ticker([260105, 260106])
+            except Exception:
+                pass
+            return {"ok": True, "message": "Token refreshed successfully. Dhan WebSocket restarted."}
+        else:
+            _token_refresh_status["status"] = "failed"
+            return {"ok": False, "error": "TOTP refresh failed — verify DHAN_PIN and DHAN_TOTP_SECRET are correct."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/broker/auto-refresh-status")
+def broker_auto_refresh_status():
+    """Return the current state of the automatic Dhan token refresh loop."""
+    return {**_token_refresh_status, "dhan_token_present": bool(os.environ.get("DHAN_ACCESS_TOKEN"))}
 
 
 @app.post("/broker/credentials/{broker}")

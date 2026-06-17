@@ -8,7 +8,7 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000 " ^| findstr "LISTENIN
 timeout /t 2 /nobreak >nul
 
 echo Installing/updating Python packages...
-python -m pip install -q yfinance python-dotenv --break-system-packages 2>nul || python -m pip install -q yfinance python-dotenv
+python -m pip install -q yfinance python-dotenv pyotp pytz --break-system-packages 2>nul || python -m pip install -q yfinance python-dotenv pyotp pytz
 
 echo Starting AlgoTrade Backend...
 cd /d "%~dp0app\backend"

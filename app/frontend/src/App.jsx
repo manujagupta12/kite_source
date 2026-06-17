@@ -2016,10 +2016,24 @@ function TokenRefreshBanner({health, onDismiss, onSaved}){
   const [forms,setForms]=useState({});
   const [msgs,setMsgs]=useState({});
   const [saving,setSaving]=useState({});
+  const [refreshing,setRefreshing]=useState(false);
+  const [refreshMsg,setRefreshMsg]=useState("");
+  const ar=health.auto_refresh||{};
+  const totpConfigured=ar.totp_configured;
   const expired=Object.entries(health.brokers||{}).filter(([,v])=>v.has_token&&v.expired);
   const missing=Object.entries(health.brokers||{}).filter(([,v])=>!v.has_token&&v.label==="Dhan");
 
   const rows=[...expired,...missing];
+
+  const triggerRefreshNow=async()=>{
+    setRefreshing(true);setRefreshMsg("");
+    try{
+      const r=await api("/broker/refresh-now",{method:"POST"});
+      if(r.ok){setRefreshMsg("✓ Token refreshed! Reconnecting…");setTimeout(onSaved,2000);}
+      else setRefreshMsg(`✗ ${r.error||"Refresh failed"}`);
+    }catch(e){setRefreshMsg("✗ Network error");}
+    finally{setRefreshing(false);}
+  };
   if(!rows.length)return null;
 
   const save=async(id,broker)=>{
@@ -2061,12 +2075,26 @@ function TokenRefreshBanner({health, onDismiss, onSaved}){
 
   return(
     <div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:"rgba(0,0,0,.7)",backdropFilter:"blur(6px)",borderBottom:"1px solid rgba(255,200,0,.25)",padding:"14px 20px",display:"flex",flexDirection:"column",gap:12}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           <span style={{fontSize:14,color:"#F5C518",fontWeight:700}}>⚠ Broker Token Refresh Required</span>
-          <span style={{fontSize:10,color:"var(--muted)"}}>Paste today's tokens below — no restart needed</span>
+          {totpConfigured
+            ? <span style={{fontSize:10,background:"rgba(0,255,157,.1)",border:"1px solid rgba(0,255,157,.25)",color:"var(--grn)",borderRadius:5,padding:"2px 8px"}}>
+                🤖 TOTP Auto-refresh ON — or click below to refresh now
+              </span>
+            : <span style={{fontSize:10,color:"var(--muted)"}}>Paste today's tokens below · Set TOTP in Settings to never do this again</span>
+          }
         </div>
-        <button onClick={onDismiss} style={{background:"none",border:"1px solid var(--br)",borderRadius:6,color:"var(--muted)",cursor:"pointer",padding:"3px 9px",fontSize:11}}>Skip</button>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {totpConfigured&&<>
+            <button onClick={triggerRefreshNow} disabled={refreshing}
+              style={{background:"var(--grn)",border:"none",borderRadius:6,color:"#000",fontWeight:700,fontSize:11,padding:"5px 14px",cursor:refreshing?"not-allowed":"pointer",opacity:refreshing?.6:1}}>
+              {refreshing?"Refreshing…":"⚡ Refresh Now (TOTP)"}
+            </button>
+            {refreshMsg&&<span style={{fontSize:11,color:refreshMsg.startsWith("✓")?"var(--grn)":"var(--red)"}}>{refreshMsg}</span>}
+          </>}
+          <button onClick={onDismiss} style={{background:"none",border:"1px solid var(--br)",borderRadius:6,color:"var(--muted)",cursor:"pointer",padding:"3px 9px",fontSize:11}}>Skip</button>
+        </div>
       </div>
       {rows.map(([id,broker])=>{
         const col=COLORS[id]||"#aaa";
@@ -2573,6 +2601,7 @@ function App(){
   const [logModal,setLogModal]=useState(null);
   const [placeModal,setPlaceModal]=useState(null);
   const [tokenHealth,setTokenHealth]=useState(null);
+  const [tokenHealth,setTokenHealth]=useState(null);
   const wsRef=useRef(null);
   const IDX_ORDER=["NIFTY","BANKNIFTY","FINNIFTY","VIX","MIDCAP","IT"];
   const indices=IDX_ORDER.map(l=>indicesMap[l]).filter(Boolean);
@@ -2582,6 +2611,15 @@ function App(){
     setLogoutHandler(()=>setUser(null));
     return ()=>setLogoutHandler(null);
   },[]);
+
+  // Poll broker token health every 5 min — drives topbar pill + banner
+  useEffect(()=>{
+    if(!user) return;
+    const check=()=>api("/broker/token-health").then(h=>setTokenHealth(h)).catch(()=>{});
+    check();
+    const t=setInterval(check, 5*60*1000);
+    return ()=>clearInterval(t);
+  },[user]);
 
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),100);return()=>clearInterval(t);},[]);
 
@@ -2663,13 +2701,7 @@ function App(){
     return()=>clearInterval(iv);
   },[user,addSignals]);
 
-  // ── Broker token health check — runs once on login ──────────────────────
-  useEffect(()=>{
-    if(!user)return;
-    api("/broker/token-health").then(h=>{
-      if(h.needs_action?.length>0)setTokenHealth(h);
-    }).catch(()=>{});
-  },[user]);
+
 
   if(!user)return(<><style>{CSS}</style><Login onLogin={u=>setUser(u)}/></>);
 
@@ -2723,6 +2755,22 @@ function App(){
             {regime?.vix!=null&&<div className="badge" style={{color:rCol}}>VIX {regime.vix}</div>}
             {pcrCount>0&&<div className="badge" style={{color:"#22c55e",borderColor:"rgba(34,197,94,.2)"}}>PCR●{pcrCount}</div>}
             <MarginBadge onSetup={()=>setTabP("margin")}/>
+            {/* Token health pill */}
+            {tokenHealth&&(tokenHealth.needs_action?.length>0
+              ? <div className="badge" title="Broker token expired — click to fix" onClick={()=>setTabP("settings")}
+                  style={{cursor:"pointer",color:"var(--red)",borderColor:"rgba(255,61,90,.3)",background:"rgba(255,61,90,.06)"}}>
+                  🔑 Token Expired
+                </div>
+              : tokenHealth.auto_refresh?.totp_configured
+                ? <div className="badge" title={`Auto-refresh ON · next: ${tokenHealth.auto_refresh?.next_refresh?.slice(11,16)||"8:50"} IST`}
+                    style={{color:"var(--grn)",borderColor:"rgba(0,255,157,.2)",background:"rgba(0,255,157,.04)"}}>
+                    🤖 Auto
+                  </div>
+                : <div className="badge" title="Token OK but TOTP not set — set once in Settings to automate" onClick={()=>setTabP("settings")}
+                    style={{cursor:"pointer",color:"var(--yel)",borderColor:"rgba(245,197,24,.25)"}}>
+                    🔑 Manual
+                  </div>
+            )}
             <div className="badge" style={{display:"flex",alignItems:"center",gap:4,color:wsStatus==="live"?"var(--grn)":wsStatus==="connecting"?"var(--yel)":"var(--red)"}}>{wsStatus==="live"?<><span style={{width:5,height:5,borderRadius:"50%",background:"var(--grn)",display:"inline-block",animation:"pulse 1s infinite"}}/>LIVE</>:wsStatus==="connecting"?"◌ CONN":"⚠ RECONN"}</div>
             <div className="badge" style={{color:"var(--muted)"}}><span className="live-dot"/>{IST}<span style={{color:"var(--acc)",fontWeight:700}}>.{IST_MS}</span></div>
           </div>

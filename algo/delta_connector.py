@@ -190,16 +190,17 @@ def get_ohlcv(symbol: str = GOLD_SYMBOL,
     resolution: 1m, 5m, 15m, 30m, 1h, 4h, 1d
     Returns list of {time, open, high, low, close, volume} dicts.
     """
-    # Delta Exchange India resolution must be a string: "1m","3m","5m","15m","30m","1h","2h","4h","6h","1d"
-    res_mins_map = {"1m": 1, "5m": 5, "15m": 15, "30m": 30,
-                    "1h": 60, "4h": 240, "1d": 1440}
+    # Delta Exchange India /v2/history/candles uses integer minutes for resolution
+    # NOT string "5m" — sending a string causes HTTP 400
+    res_mins_map = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+                    "1h": 60, "2h": 120, "4h": 240, "6h": 360, "1d": 1440}
     res_mins = res_mins_map.get(resolution, 5)
     now   = int(time.time())
     start = now - (res_mins * 60 * limit)
 
     data = _get(f"/v2/history/candles", params={
         "symbol":     symbol,
-        "resolution": resolution,   # send string "5m" not integer 5
+        "resolution": res_mins,   # integer minutes: 1, 5, 15, 30, 60, 240, 1440
         "start":      start,
         "end":        now,
     })

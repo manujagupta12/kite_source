@@ -125,7 +125,7 @@ echo.
 echo  ==========================================================
 echo   DONE
 echo   Dashboard : http://localhost:5173
-echo   Login     : demo@algotrade.in / demo123
+echo   Login     : Use the email you registered with
 echo  ==========================================================
 echo.
 pause

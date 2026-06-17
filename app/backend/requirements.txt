@@ -16,6 +16,8 @@ python-dotenv==1.0.1
 # ── Auth ──────────────────────────────────────────────────────
 python-jose[cryptography]==3.3.0
 bcrypt==4.2.1
+pyotp==2.9.0         # TOTP auto-refresh for Dhan daily token rotation
+pytz==2024.2         # IST timezone handling for 8:50 AM refresh loop
 
 # ── Data processing ───────────────────────────────────────────
 pandas==2.2.3
